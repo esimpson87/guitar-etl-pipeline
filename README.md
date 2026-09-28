@@ -28,3 +28,8 @@ Designed to support business intelligence and pricing analytics, the architectur
 * **Security & Configuration:** Abstracted all database connection strings, cloud keys, and API tokens out of the codebase using environment variables (`.env`) and `.gitignore` policies.
 * **Idempotent Infrastructure:** Engineered the C# application to automatically verify and provision required SQL schemas on startup if they do not exist.
 * **Cross-Cloud IAM:** Configured distinct Google Cloud Service Accounts with scoped permissions (Storage Object Admin, BigQuery Data Editor, BigQuery Job User) to ensure the principle of least privilege between the extraction application and the dbt transformation layer.
+
+## Business Intelligence Visualization
+An interactive Looker Studio dashboard connected directly to the BigQuery analytical dataset allows users to filter and explore Reverb pricing trends against historical production configurations.
+
+[View the Dashboard](https://datastudio.google.com/reporting/888d714c-88e8-43d7-9555-a9a57f213e9a)
