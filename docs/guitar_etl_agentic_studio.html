@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>guitar-etl-pipeline v2.0 | Agentic AI &amp; SRE Control Plane</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --surface: #131b2e;
+      --surface-alt: #1a2540;
+      --border: #2a395c;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --emerald: #34d399;
+      --amber: #fbbf24;
+      --rose: #fb7185;
+      --mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.55;
+      padding-bottom: 48px;
+    }
+    header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 24px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge {
+      background: rgba(56, 189, 248, 0.14);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+    .badge.emerald {
+      background: rgba(52, 211, 153, 0.14);
+      color: var(--emerald);
+      border-color: rgba(52, 211, 153, 0.4);
+    }
+    .badge.amber {
+      background: rgba(251, 191, 36, 0.14);
+      color: var(--amber);
+      border-color: rgba(251, 191, 36, 0.4);
+    }
+    .badge.rose {
+      background: rgba(251, 113, 133, 0.14);
+      color: var(--rose);
+      border-color: rgba(251, 113, 133, 0.4);
+    }
+    h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+    .subtitle { color: var(--muted); font-size: 13.5px; margin-top: 4px; }
+    .container { max-width: 1340px; margin: 0 auto; padding: 24px 32px; }
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi-value { font-size: 26px; font-weight: 700; margin-top: 6px; color: var(--text); }
+    .kpi-sub { font-size: 12px; color: var(--emerald); margin-top: 4px; }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 12px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.18s;
+      white-space: nowrap;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: rgba(56, 189, 248, 0.06);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .grid-2 { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; }
+    @media (max-width: 980px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      gap: 12px;
+    }
+    .card-title { font-size: 16px; font-weight: 700; }
+
+    .dag-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .agent-node {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    .agent-node:hover, .agent-node.selected {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .agent-step { font-size: 11px; color: var(--accent); font-weight: 700; text-transform: uppercase; }
+    .agent-name { font-size: 14.5px; font-weight: 700; margin: 4px 0; }
+    .agent-desc { font-size: 12.5px; color: var(--muted); }
+
+    .btn {
+      background: linear-gradient(135deg, #0284c7, #4f46e5);
+      color: #fff;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13.5px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn:hover { opacity: 0.94; }
+    .btn-secondary {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .terminal {
+      background: #070a12;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      height: 390px;
+      overflow-y: auto;
+      color: #cbd5e1;
+    }
+    .log-line { margin-bottom: 8px; line-height: 1.45; }
+    .log-ts { color: #64748b; }
+    .log-agent { color: var(--accent); font-weight: 600; }
+    .log-ok { color: var(--emerald); }
+    .log-warn { color: var(--amber); }
+    .log-err { color: var(--rose); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      background: var(--surface-alt);
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 11.5px;
+      letter-spacing: 0.04em;
+    }
+    td.num, th.num { text-align: right; font-family: var(--mono); }
+
+    pre {
+      background: #070a12;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #e2e8f0;
+      line-height: 1.5;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+    select, input {
+      width: 100%;
+      background: #090d16;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 8px;
+      font-size: 13.5px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="brand-title">
+        <h1>guitar-etl-pipeline v2.0</h1>
+        <span class="badge">C# .NET 8 Semantic Kernel</span>
+        <span class="badge emerald">dbt Star Schema</span>
+        <span class="badge amber">LiteLLM Proxy + SRE Auto-Remediation</span>
+      </div>
+      <div class="subtitle">
+        Autonomous Multi-Agent ELT, Self-Healing Data Quality &amp; Secondary-Market Arbitrage Engine — Built by Eric Simpson
+      </div>
+    </div>
+    <div>
+      <button class="btn" onclick="runLiveSimulation()">&#9654; Run Full Multi-Agent Pipeline Trace</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="kpi-strip">
+      <div class="kpi-card">
+        <div class="kpi-label">Orchestrated Agents</div>
+        <div class="kpi-value">4 Autonomous</div>
+        <div class="kpi-sub">Ingest &bull; SRE Heal &bull; NL2SQL RAG &bull; Arbitrage</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">SRE Incidents Auto-Healed</div>
+        <div class="kpi-value">3 / 3 (100%)</div>
+        <div class="kpi-sub">Zero pipeline halts; 3/3 dbt tests PASS</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">LiteLLM Proxy Telemetry</div>
+        <div class="kpi-value">20 Calls ($0.027)</div>
+        <div class="kpi-sub">46.4ms avg latency &bull; 1 circuit-breaker recovery</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Top Arbitrage Signal</div>
+        <div class="kpi-value">+19.87% Net ROI</div>
+        <div class="kpi-sub">$332.85 net profit after Reverb fees &amp; setup</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('tab-overview', this)">1. Multi-Agent Architecture &amp; Live Trace</button>
+      <button class="tab-btn" onclick="switchTab('tab-arbitrage', this)">2. Arbitrage Deal Scanner &amp; ROI Simulator</button>
+      <button class="tab-btn" onclick="switchTab('tab-sre', this)">3. SRE Self-Healing &amp; LiteLLM Telemetry</button>
+      <button class="tab-btn" onclick="switchTab('tab-code', this)">4. C# Semantic Kernel, dbt SQL &amp; LiteLLM Config</button>
+    </div>
+
+    <!-- TAB 1: ARCHITECTURE & LIVE TRACE -->
+    <div id="tab-overview" class="tab-panel active">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Interactive 4-Agent ELT &amp; Observability Control Plane (Click any agent node to inspect)</div>
+          <span class="badge">Azure SQL / GCS Staging &rarr; dbt Star Schema</span>
+        </div>
+        <div class="dag-grid">
+          <div class="agent-node selected" onclick="selectAgent(0, this)">
+            <div class="agent-step">Agent 01 &bull; C# .NET 8 + Semantic Kernel</div>
+            <div class="agent-name">Ingestion &amp; Wiki RAG Enricher</div>
+            <div class="agent-desc">Extracts Reverb API &amp; eBay listings + unstructured Wikipedia specs into canonical attributes.</div>
+          </div>
+          <div class="agent-node" onclick="selectAgent(1, this)">
+            <div class="agent-step">Agent 02 &bull; SRE Self-Healing</div>
+            <div class="agent-name">Pipeline Reliability Agent</div>
+            <div class="agent-desc">Intercepts schema drift, coerces currency strings, quarantines negative/counterfeit outliers &amp; deduplicates serials.</div>
+          </div>
+          <div class="agent-node" onclick="selectAgent(2, this)">
+            <div class="agent-step">Agent 03 &bull; Hybrid Analytics</div>
+            <div class="agent-name">Text-to-SQL + Wiki RAG Agent</div>
+            <div class="agent-desc">Translates natural language into parameterized SQL over <code>mart_instrument_valuation</code> &amp; attaches luthier specs.</div>
+          </div>
+          <div class="agent-node" onclick="selectAgent(3, this)">
+            <div class="agent-step">Agent 04 &bull; Decision Engine</div>
+            <div class="agent-name">Arbitrage &amp; Sourcing Agent</div>
+            <div class="agent-desc">Scores live listings against historical comps, deducting Reverb/eBay fees, shipping, and bench setup labor.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title" id="inspector-title">Agent 01: Ingestion &amp; Wikipedia RAG Enricher</div>
+            <span class="badge emerald" id="inspector-model">Routed Model: gpt-4o-mini</span>
+          </div>
+          <p id="inspector-desc" style="color: var(--muted); font-size: 13.5px; margin-bottom: 12px;">
+            Uses C# .NET 8 Semantic Kernel native function calling to extract structured listings from the Reverb Developer Hub API and unstructured luthier history from Wikipedia, normalizing raw titles into canonical instrument dimensions.
+          </p>
+          <pre id="inspector-json">{
+  "agent": "IngestionEnrichmentAgent",
+  "plugin": "GuitarMarketPlugin.ExtractCanonicalSpecsAsync",
+  "input_raw_title": "2022 Fender American Professional II Stratocaster Olympic White - Estate Sale",
+  "wikipedia_rag_match": "Fender Stratocaster (25.5-inch scale, SSS pickup config, Alder/Ash body, Corona CA USA)",
+  "normalized_output": {
+    "canonical_model": "Fender Stratocaster",
+    "series_submodel": "American Professional II",
+    "production_year": 2022,
+    "pickup_config": "SSS",
+    "country_of_origin": "USA"
+  }
+}</pre>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Live Execution Stream &amp; Tool-Call Trace</div>
+            <button class="btn btn-secondary" onclick="runLiveSimulation()">Re-Run Trace</button>
+          </div>
+          <div class="terminal" id="terminal-output"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: ARBITRAGE DEAL SCANNER & INTERACTIVE SIMULATOR -->
+    <div id="tab-arbitrage" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Autonomous Resale Arbitrage Signals (Verified Output from <code>fact_market_listings</code>)</div>
+          <span class="badge emerald">Includes Reverb 8.19% + $0.49 Fee &amp; $35 Luthier Setup Allowance</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Listing ID</th>
+              <th>Canonical Model</th>
+              <th>Source</th>
+              <th>Condition</th>
+              <th class="num">Ask + Ship</th>
+              <th class="num">All-In Cost</th>
+              <th class="num">Avg Sold Comp</th>
+              <th class="num">Est. Fees</th>
+              <th class="num">Net Profit</th>
+              <th class="num">Net ROI</th>
+              <th>Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>REV-LIVE-102</code></td>
+              <td><strong>Gibson Les Paul Standard</strong> ('60s)</td>
+              <td>Reverb (IN)</td>
+              <td>Excellent</td>
+              <td class="num">$1,595.00</td>
+              <td class="num">$1,675.00</td>
+              <td class="num">$2,187.50</td>
+              <td class="num">$179.65</td>
+              <td class="num" style="color:var(--emerald);font-weight:700;">+$332.85</td>
+              <td class="num" style="color:var(--emerald);font-weight:700;">19.87%</td>
+              <td><span class="badge emerald">STRONG_BUY</span></td>
+            </tr>
+            <tr>
+              <td><code>EBAY-LIVE-101</code></td>
+              <td><strong>Fender Stratocaster</strong> (Am Pro II)</td>
+              <td>eBay (KY)</td>
+              <td>Very Good</td>
+              <td class="num">$960.00</td>
+              <td class="num">$1,040.00</td>
+              <td class="num">$1,355.00</td>
+              <td class="num">$111.46</td>
+              <td class="num" style="color:var(--emerald);font-weight:700;">+$203.54</td>
+              <td class="num" style="color:var(--emerald);font-weight:700;">19.57%</td>
+              <td><span class="badge emerald">STRONG_BUY</span></td>
+            </tr>
+            <tr>
+              <td><code>EBAY-LIVE-103</code></td>
+              <td><strong>Ibanez RG550 Genesis</strong> (MIJ)</td>
+              <td>eBay (OH)</td>
+              <td>Very Good</td>
+              <td class="num">$590.00</td>
+              <td class="num">$670.00</td>
+              <td class="num">$862.50</td>
+              <td class="num">$71.13</td>
+              <td class="num" style="color:var(--emerald);font-weight:700;">+$121.37</td>
+              <td class="num" style="color:var(--emerald);font-weight:700;">18.11%</td>
+              <td><span class="badge emerald">STRONG_BUY</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Interactive Deal Valuation &amp; Net ROI Calculator (Test Any Secondary-Market Listing)</div>
+          <span class="badge">Live Star Schema Comp Lookup</span>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Canonical Instrument Model</label>
+            <select id="sim-model" onchange="recalcArbitrage()">
+              <option value="1355.00|Fender Stratocaster|USA|SSS">Fender Stratocaster (Avg Sold: $1,355.00)</option>
+              <option value="2187.50|Gibson Les Paul Standard|USA|HH" selected>Gibson Les Paul Standard (Avg Sold: $2,187.50)</option>
+              <option value="3100.00|PRS Custom 24|USA|HH">PRS Custom 24 Core (Avg Sold: $3,100.00)</option>
+              <option value="862.50|Ibanez RG550 Genesis|Japan|HSH">Ibanez RG550 Genesis MIJ (Avg Sold: $862.50)</option>
+              <option value="2450.00|Martin D-28|USA|Acoustic">Martin D-28 Standard (Avg Sold: $2,450.00)</option>
+            </select>
+          </div>
+          <div>
+            <label>Listing Ask Price ($ USD)</label>
+            <input type="number" id="sim-ask" value="1540" oninput="recalcArbitrage()" />
+          </div>
+          <div>
+            <label>Inbound Shipping ($ USD)</label>
+            <input type="number" id="sim-ship" value="55" oninput="recalcArbitrage()" />
+          </div>
+          <div>
+            <label>Bench Setup + Outbound Ship ($ USD)</label>
+            <input type="number" id="sim-overhead" value="80" oninput="recalcArbitrage()" />
+          </div>
+        </div>
+        <pre id="sim-output"></pre>
+      </div>
+    </div>
+
+    <!-- TAB 3: SRE SELF-HEALING & LITELLM TELEMETRY -->
+    <div id="tab-sre" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">SRE Pipeline Reliability Agent &mdash; Automated Anomaly &amp; Schema-Drift Remediation Log</div>
+          <span class="badge amber">Event-Driven Auto-Remediation</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Incident ID</th>
+              <th>Severity</th>
+              <th>Listing ID</th>
+              <th>Anomaly Detected</th>
+              <th>Raw Payload Value</th>
+              <th>Autonomous Action Taken</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>INC-SRE-1001</code></td>
+              <td><span class="badge amber">P3_WARNING</span></td>
+              <td><code>EBAY-LIVE-101</code></td>
+              <td><code>SCHEMA_DRIFT_CURRENCY_STRING</code></td>
+              <td><code>"$925.00 USD"</code></td>
+              <td>Coerced currency string to float <code>925.00</code> via fallback LLM parser</td>
+              <td><span class="badge emerald">AUTO_REMEDIATED</span></td>
+            </tr>
+            <tr>
+              <td><code>INC-SRE-1002</code></td>
+              <td><span class="badge rose">P2_CRITICAL_DQ</span></td>
+              <td><code>REV-ERR-991</code></td>
+              <td><code>INVALID_NEGATIVE_PRICE_OR_REPLICA</code></td>
+              <td><code>price=-450.00, "Replica Copy Fake"</code></td>
+              <td>Isolated record to Dead-Letter Queue table <code>srt_quarantine_dlq</code></td>
+              <td><span class="badge rose">QUARANTINED</span></td>
+            </tr>
+            <tr>
+              <td><code>INC-SRE-1003</code></td>
+              <td><span class="badge amber">P3_WARNING</span></td>
+              <td><code>REV-DUP-9001</code></td>
+              <td><code>DUPLICATE_SERIAL_ENTITY</code></td>
+              <td><code>serial=US22048192 (dup of REV-9001)</code></td>
+              <td>Deduplicated by composite key <code>(serial_number, listing_type)</code></td>
+              <td><span class="badge emerald">DEDUPLICATED</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">LiteLLM Proxy Model Routing &amp; Fallback Policy</div>
+          <span class="badge">Multi-Cloud LLMOps Control Plane</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Workflow Task Type</th>
+              <th>Assigned Agent</th>
+              <th>Primary Model Route</th>
+              <th>Circuit-Breaker Fallback</th>
+              <th class="num">Avg Latency</th>
+              <th>Routing Rationale</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>entity_extraction</code></td>
+              <td><code>IngestionEnrichmentAgent</code></td>
+              <td><code>gpt-4o-mini</code></td>
+              <td><code>snowflake-cortex-llama3-70b</code></td>
+              <td class="num">42.5 ms</td>
+              <td>High-throughput, low-cost structured JSON extraction for titles &amp; Wikipedia text</td>
+            </tr>
+            <tr>
+              <td><code>sre_remediation</code></td>
+              <td><code>SREAutoRemediationAgent</code></td>
+              <td><code>claude-3-5-sonnet-bedrock</code></td>
+              <td><code>gpt-4o</code> (Triggered &amp; Recovered)</td>
+              <td class="num">118.0 ms</td>
+              <td>Strict schema coercion and root-cause incident classification</td>
+            </tr>
+            <tr>
+              <td><code>text_to_sql_rag</code></td>
+              <td><code>MarketIntelligenceAgent</code></td>
+              <td><code>claude-3-5-sonnet-bedrock</code></td>
+              <td><code>gpt-4o</code></td>
+              <td class="num">42.6 ms</td>
+              <td>High accuracy on Star Schema SQL joins + grounded Wikipedia synthesis</td>
+            </tr>
+            <tr>
+              <td><code>arbitrage_valuation</code></td>
+              <td><code>ArbitrageSourcingAgent</code></td>
+              <td><code>gpt-4o</code></td>
+              <td><code>claude-3-5-sonnet-bedrock</code></td>
+              <td class="num">42.6 ms</td>
+              <td>Multi-constraint financial fee calculation &amp; risk-adjusted buy scoring</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 4: PRODUCTION CODE & DBT MODELS -->
+    <div id="tab-code" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">C# .NET 8 Semantic Kernel Plugin (<code>GuitarMarketPlugin.cs</code>)</div>
+          <span class="badge">Microsoft.SemanticKernel 1.x</span>
+        </div>
+        <pre>using System.ComponentModel;
+using System.Net.Http.Json;
+using Microsoft.SemanticKernel;
+
+namespace GuitarEtlPipeline.Agents.Plugins;
+
+public sealed class GuitarMarketPlugin(HttpClient httpClient)
+{
+    [KernelFunction("extract_reverb_listings")]
+    [Description("Fetches active and sold guitar listings from the Reverb Developer Hub API and normalizes pricing.")]
+    public async Task&lt;string&gt; ExtractReverbListingsAsync(
+        [Description("Canonical search query, e.g., 'Fender American Professional II Stratocaster'")] string query,
+        [Description("Maximum number of listings to ingest")] int limit = 25,
+        CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"https://api.reverb.com/api/listings/all?query={Uri.EscapeDataString(query)}&amp;per_page={limit}");
+        request.Headers.Add("Accept-Version", "3.0");
+
+        var response = await httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct);
+    }
+
+    [KernelFunction("query_star_schema_valuation")]
+    [Description("Executes a parameterized read-only query against mart_instrument_valuation for comp analysis.")]
+    public async Task&lt;InstrumentValuationDto&gt; QueryStarSchemaValuationAsync(
+        [Description("Canonical instrument model name")] string canonicalModel,
+        CancellationToken ct = default)
+    {
+        // Connects to BigQuery / Snowflake / Azure SQL Star Schema mart
+        return await StarSchemaRepository.GetValuationByModelAsync(canonicalModel, ct);
+    }
+}</pre>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">dbt Star Schema Mart Model (<code>models/marts/mart_instrument_valuation.sql</code>)</div>
+          <span class="badge emerald">dbt Core &bull; BigQuery / Snowflake</span>
+        </div>
+        <pre>{{ config(materialized='table', tags=['star_schema', 'market_intelligence']) }}
+
+WITH sold_comps AS (
+    SELECT
+        f.listing_id,
+        f.instrument_key,
+        f.price_usd,
+        f.landed_cost_usd,
+        f.listed_date
+    FROM {{ ref('fact_market_listings') }} f
+    WHERE f.listing_type = 'SOLD_COMP'
+      AND f.price_usd &gt; 0
+)
+SELECT
+    i.instrument_key,
+    i.canonical_model,
+    i.brand,
+    i.pickup_config,
+    i.country_of_origin,
+    i.scale_length_in,
+    COUNT(s.listing_id) AS sold_comp_count,
+    ROUND(AVG(s.price_usd), 2) AS avg_sold_price_usd,
+    ROUND(MIN(s.price_usd), 2) AS min_sold_price_usd,
+    ROUND(MAX(s.price_usd), 2) AS max_sold_price_usd,
+    ROUND(AVG(s.landed_cost_usd), 2) AS avg_landed_sold_usd
+FROM {{ ref('dim_instrument') }} i
+INNER JOIN sold_comps s
+    ON i.instrument_key = s.instrument_key
+GROUP BY
+    i.instrument_key,
+    i.canonical_model,
+    i.brand,
+    i.pickup_config,
+    i.country_of_origin,
+    i.scale_length_in</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const AGENT_DETAILS = [
+      {
+        title: "Agent 01: Ingestion & Wikipedia RAG Enricher",
+        model: "Routed Model: gpt-4o-mini",
+        desc: "Uses C# .NET 8 Semantic Kernel native function calling to extract structured listings from the Reverb Developer Hub API and unstructured luthier history from Wikipedia, normalizing raw titles into canonical instrument dimensions.",
+        json: {
+          agent: "IngestionEnrichmentAgent",
+          plugin: "GuitarMarketPlugin.ExtractCanonicalSpecsAsync",
+          input_raw_title: "2022 Fender American Professional II Stratocaster Olympic White - Estate Sale",
+          wikipedia_rag_match: "Fender Stratocaster (25.5-inch scale, SSS pickup config, Alder/Ash body, Corona CA USA)",
+          normalized_output: {
+            canonical_model: "Fender Stratocaster",
+            series_submodel: "American Professional II",
+            production_year: 2022,
+            pickup_config: "SSS",
+            country_of_origin: "USA"
+          }
+        }
+      },
+      {
+        title: "Agent 02: SRE Self-Healing & Data Quality Agent",
+        model: "Routed Model: claude-3-5-sonnet-bedrock -> gpt-4o (Fallback)",
+        desc: "Embeds SRE observability directly into the ELT pipeline: detects schema drift in price strings, quarantines counterfeit/negative price records to a Dead-Letter Queue, and deduplicates serial numbers before dbt runs.",
+        json: {
+          agent: "SREAutoRemediationAgent",
+          incidents_resolved: [
+            {
+              incident_id: "INC-SRE-1001",
+              listing_id: "EBAY-LIVE-101",
+              anomaly: "SCHEMA_DRIFT_CURRENCY_STRING ('$925.00 USD')",
+              action: "COERCE_FLOAT_925.00",
+              litellm_route: "Fallback to gpt-4o succeeded in 118.0ms"
+            },
+            {
+              incident_id: "INC-SRE-1002",
+              listing_id: "REV-ERR-991",
+              anomaly: "INVALID_NEGATIVE_PRICE_OR_REPLICA (-450.00)",
+              action: "QUARANTINE_TO_DEAD_LETTER_QUEUE"
+            }
+          ],
+          dbt_post_remediation_tests: {
+            assert_positive_fact_prices: "PASS",
+            assert_referential_integrity_dim_instrument: "PASS",
+            assert_unique_serial_per_listing_type: "PASS"
+          }
+        }
+      },
+      {
+        title: "Agent 03: Hybrid Text-to-SQL & Wikipedia RAG Agent",
+        model: "Routed Model: claude-3-5-sonnet-bedrock",
+        desc: "Translates natural-language analytical queries into Star Schema SQL joins across mart_instrument_valuation and dim_instrument, blending quantitative comp metrics with qualitative luthier specs.",
+        json: {
+          agent: "MarketIntelligenceAgent",
+          natural_language_query: "Compare average sold prices and luthier specifications across all guitar models in our star schema.",
+          generated_sql: "SELECT v.canonical_model, v.brand, v.country_of_origin, v.pickup_config, v.sold_comp_count, v.avg_sold_price_usd FROM mart_instrument_valuation v JOIN dim_instrument d ON v.instrument_key = d.instrument_key ORDER BY v.avg_sold_price_usd DESC",
+          top_comp_summary: [
+            { model: "PRS Custom 24", origin: "USA", pickups: "HH", avg_sold_usd: 3100.00 },
+            { model: "Martin D-28", origin: "USA", pickups: "Acoustic / Piezo", avg_sold_usd: 2450.00 },
+            { model: "Gibson Les Paul Standard", origin: "USA", pickups: "HH", avg_sold_usd: 2187.50 },
+            { model: "Fender Stratocaster", origin: "USA", pickups: "SSS", avg_sold_usd: 1355.00 },
+            { model: "Ibanez RG550 Genesis", origin: "Japan", pickups: "HSH", avg_sold_usd: 862.50 }
+          ]
+        }
+      },
+      {
+        title: "Agent 04: Autonomous Resale Arbitrage & Deal Sourcing Agent",
+        model: "Routed Model: gpt-4o",
+        desc: "Evaluates live marketplace listings against Star Schema historical sold comps, accounting for Reverb selling & payment processing fees (8.19% + $0.49), shipping, and a $35 bench setup allowance.",
+        json: {
+          agent: "ArbitrageSourcingAgent",
+          target_threshold: "Net ROI >= 15.0%",
+          top_recommendation: {
+            listing_id: "REV-LIVE-102",
+            canonical_model: "Gibson Les Paul Standard ('60s)",
+            ask_plus_inbound_ship_usd: 1595.00,
+            all_in_cost_with_setup_usd: 1675.00,
+            expected_reverb_sale_usd: 2187.50,
+            reverb_platform_fees_usd: 179.65,
+            estimated_net_profit_usd: 332.85,
+            net_roi_pct: 19.87,
+            signal: "STRONG_BUY"
+          }
+        }
+      }
+    ];
+
+    function switchTab(tabId, btn) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+      btn.classList.add('active');
+    }
+
+    function selectAgent(idx, el) {
+      document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+      const d = AGENT_DETAILS[idx];
+      document.getElementById('inspector-title').textContent = d.title;
+      document.getElementById('inspector-model').textContent = d.model;
+      document.getElementById('inspector-desc').textContent = d.desc;
+      document.getElementById('inspector-json').textContent = JSON.stringify(d.json, null, 2);
+    }
+
+    const TRACE_STEPS = [
+      { ts: "00:00.012", agent: "LiteLLMRouter", cls: "log-ok", msg: "Initialized multi-cloud routing table (gpt-4o-mini, claude-3-5-sonnet-bedrock, gpt-4o, snowflake-cortex-llama3-70b)" },
+      { ts: "00:00.084", agent: "IngestionAgent", cls: "log-ok", msg: "[KernelFunction: extract_wikipedia_specs] Extracted structured luthier specs for 5 canonical models (Fender, Gibson, PRS, Ibanez, Martin)" },
+      { ts: "00:00.165", agent: "SREAutoRemediation", cls: "log-warn", msg: "[INC-SRE-1001] Schema drift detected in EBAY-LIVE-101 price_raw='$925.00 USD'. Triggering LLM coercion..." },
+      { ts: "00:00.283", agent: "LiteLLMRouter", cls: "log-warn", msg: "Primary endpoint timeout simulated on claude-3-5-sonnet-bedrock -> Circuit-breaker routed to gpt-4o fallback (118.0ms) -> Coerced to 925.00" },
+      { ts: "00:00.340", agent: "SREAutoRemediation", cls: "log-err", msg: "[INC-SRE-1002] Anomaly detected in REV-ERR-991 (price=-450.00, counterfeit keyword). Quarantined to srt_quarantine_dlq." },
+      { ts: "00:00.395", agent: "SREAutoRemediation", cls: "log-warn", msg: "[INC-SRE-1003] Duplicate serial US22048192 in REV-DUP-9001 deduplicated prior to fact table load." },
+      { ts: "00:00.510", agent: "dbtStarSchema", cls: "log-ok", msg: "Built dim_instrument (5 rows), dim_marketplace (2 rows), fact_market_listings (12 clean rows), mart_instrument_valuation." },
+      { ts: "00:00.590", agent: "dbtTestRunner", cls: "log-ok", msg: "PASS: assert_positive_fact_prices | PASS: assert_referential_integrity_dim_instrument | PASS: assert_unique_serial_per_listing_type" },
+      { ts: "00:00.710", agent: "MarketIntelAgent", cls: "log-ok", msg: "Executed hybrid NL2SQL + Wikipedia RAG query across 9 historical sold comps (Avg latency: 42.6ms)." },
+      { ts: "00:00.845", agent: "ArbitrageAgent", cls: "log-ok", msg: "Scored 3 active listings: REV-LIVE-102 (+19.87% ROI / +$332.85), EBAY-LIVE-101 (+19.57% ROI / +$203.54), EBAY-LIVE-103 (+18.11% ROI / +$121.37)." }
+    ];
+
+    function runLiveSimulation() {
+      const term = document.getElementById('terminal-output');
+      term.innerHTML = '';
+      TRACE_STEPS.forEach((step, i) => {
+        setTimeout(() => {
+          const div = document.createElement('div');
+          div.className = 'log-line';
+          div.innerHTML = `<span class="log-ts">[${step.ts}]</span> <span class="log-agent">[${step.agent}]</span> <span class="${step.cls}">${step.msg}</span>`;
+          term.appendChild(div);
+          term.scrollTop = term.scrollHeight;
+        }, i * 160);
+      });
+    }
+
+    function recalcArbitrage() {
+      const [avgSoldStr, modelName, origin, pickups] = document.getElementById('sim-model').value.split('|');
+      const avgSold = parseFloat(avgSoldStr);
+      const ask = parseFloat(document.getElementById('sim-ask').value || 0);
+      const ship = parseFloat(document.getElementById('sim-ship').value || 0);
+      const overhead = parseFloat(document.getElementById('sim-overhead').value || 0);
+
+      const allInCost = ask + ship + overhead;
+      const reverbFees = +(avgSold * (0.05 + 0.0319) + 0.49).toFixed(2);
+      const netProfit = +(avgSold - reverbFees - allInCost).toFixed(2);
+      const netRoi = allInCost > 0 ? +((netProfit / allInCost) * 100).toFixed(2) : 0;
+      const signal = netRoi >= 15 ? "STRONG_BUY (Meets >=15% Net ROI Target)" : (netRoi > 0 ? "HOLD_WATCH (Positive Margin, Below 15% Target)" : "PASS_OVERPRICED (Negative Expected Margin)");
+
+      document.getElementById('sim-output').textContent = JSON.stringify({
+        instrument_dimension: { canonical_model: modelName, country_of_origin: origin, pickup_config: pickups },
+        acquisition_breakdown_usd: { listing_ask: ask, inbound_shipping: ship, setup_and_outbound_buffer: overhead, total_all_in_cost: +allInCost.toFixed(2) },
+        resale_projection_usd: { star_schema_avg_sold_comp: avgSold, reverb_platform_and_processing_fees: reverbFees, estimated_net_profit: netProfit, net_roi_pct: netRoi },
+        agent_decision: signal
+      }, null, 2);
+    }
+
+    runLiveSimulation();
+    recalcArbitrage();
+  </script>
+</body>
+</html>

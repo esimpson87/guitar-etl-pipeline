@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: dim_instrument
+    description: "Canonical guitar dimension enriched with unstructured Wikipedia luthier specifications."
+    columns:
+      - name: instrument_key
+        tests:
+          - unique
+          - not_null
+      - name: canonical_model
+        tests:
+          - unique
+          - not_null
+
+  - name: fact_market_listings
+    description: "Cleaned secondary-market sold comps and active listings post-SRE remediation."
+    columns:
+      - name: listing_id
+        tests:
+          - unique
+          - not_null
+      - name: instrument_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_instrument')
+              field: instrument_key
+      - name: price_usd
+        tests:
+          - not_null
