@@ -1,27 +1,50 @@
 model_list:
-- model_name: entity-extractor-fast
-litellm_params:
-model: openai/gpt-4o-mini
-api_key: os.environ/OPENAI_API_KEY
-rpm: 500
-- model_name: cortex-fallback-extractor
-litellm_params:
-model: snowflake/llama3-70b
-api_base: os.environ/SNOWFLAKE_CORTEX_ENDPOINT
-api_key: os.environ/SNOWFLAKE_PAT
-- model_name: reasoning-bedrock-sonnet
-litellm_params:
-model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
-aws_region_name: us-east-1
-- model_name: reasoning-gpt4o
-litellm_params:
-model: openai/gpt-4o
-api_key: os.environ/OPENAI_API_KEY
+  - model_name: enterprise-chat
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 500
+      timeout: 30
+
+  - model_name: entity-extractor-fast
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 500
+      timeout: 30
+
+  - model_name: cortex-fallback-extractor
+    litellm_params:
+      model: snowflake/llama3-70b
+      api_base: os.environ/SNOWFLAKE_CORTEX_ENDPOINT
+      api_key: os.environ/SNOWFLAKE_PAT
+      timeout: 45
+
+  - model_name: reasoning-bedrock-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+      aws_region_name: us-east-1
+      timeout: 60
+
+  - model_name: reasoning-gpt4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      timeout: 60
 
 router_settings:
-routing_strategy: latency-based-routing
-num_retries: 2
-timeout: 15
-fallbacks:
-- {"entity-extractor-fast": ["cortex-fallback-extractor"]}
-- {"reasoning-bedrock-sonnet": ["reasoning-gpt4o"]}
+  routing_strategy: latency-based-routing
+  num_retries: 3
+  timeout: 30
+  allowed_fails: 2
+  cooldown_time: 60
+  fallbacks:
+    - entity-extractor-fast:
+        - cortex-fallback-extractor
+    - reasoning-bedrock-sonnet:
+        - reasoning-gpt4o
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  json_logs: true

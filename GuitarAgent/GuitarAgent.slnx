@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GuitarAgent.AI/GuitarAgent.AI.csproj" />
+    <Project Path="src/GuitarAgent.Console/GuitarAgent.Console.csproj" />
+    <Project Path="src/GuitarAgent.Domain/GuitarAgent.Domain.csproj" />
+    <Project Path="src/GuitarAgent.Infrastructure/GuitarAgent.Infrastructure.csproj" />
+  </Folder>
+</Solution>

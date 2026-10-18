@@ -13,6 +13,15 @@ bld/
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
+TestResults/
+
+# dbt artifacts
+guitar_analytics/target/
+guitar_analytics/dbt_packages/
+guitar_analytics/logs/
+
+# Runtime DLQ output
+sre_quarantine_dlq.jsonl
 
 # Secrets
 .env

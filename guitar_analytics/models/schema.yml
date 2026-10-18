@@ -1,0 +1,66 @@
+version: 2
+
+models:
+  - name: dim_guitars
+    description: "Dimension table containing canonical electric guitar specifications extracted from historical sources."
+    columns:
+      - name: guitar_model
+        description: "Primary canonical name of the guitar model."
+        tests:
+          - unique
+          - not_null
+      - name: production_years
+        description: "Historical production years range."
+      - name: body_construction
+        description: "Body wood and construction details."
+
+  - name: fact_market_pricing
+    description: "Fact table recording secondary market pricing snapshots from Reverb."
+    columns:
+      - name: guitar_model
+        description: "Foreign key to dim_guitars.guitar_model."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_guitars')
+              field: guitar_model
+      - name: average_price
+        description: "Average active listing price in USD."
+        tests:
+          - not_null
+      - name: lowest_price
+        description: "Lowest active listing price in USD."
+      - name: listing_count
+        description: "Total active used listings sampled."
+        tests:
+          - not_null
+      - name: snapshot_timestamp
+        description: "UTC timestamp when the market snapshot was captured."
+        tests:
+          - not_null
+
+  - name: mart_instrument_valuation
+    description: "Analytical valuation mart aggregating historical specs with rolling secondary market pricing."
+    columns:
+      - name: canonical_model
+        description: "Canonical guitar model identifier."
+        tests:
+          - unique
+          - not_null
+      - name: avg_market_price_usd
+        description: "Historical mean market price in USD across valid snapshots."
+        tests:
+          - not_null
+
+  - name: quarantine_dlq
+    description: "SRE Dead-Letter Queue view surfacing poisoned or anomalous market records quarantined prior to warehouse load."
+    columns:
+      - name: incident_id
+        description: "Unique SRE incident identifier (e.g., INC-SRE-*)."
+        tests:
+          - unique
+          - not_null
+      - name: anomaly_type
+        description: "Classification of data anomaly detected by SRE self-healing."
+        tests:
+          - not_null

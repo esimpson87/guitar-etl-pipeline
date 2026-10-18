@@ -1,0 +1,53 @@
+name: CI — Build, Test & Data Quality Gates
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  dotnet-build-and-test:
+    name: .NET Solution Build & xUnit Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore GuitarEtl.sln
+
+      - name: Build solution (Release)
+        run: dotnet build GuitarEtl.sln --configuration Release --no-restore
+
+      - name: Execute xUnit Test Suite (Arbitrage, SRE Self-Healing, Semantic Kernel Plugins)
+        run: dotnet test GuitarEtl.sln --configuration Release --no-build --verbosity normal
+
+  validate-configs-and-dbt:
+    name: Validate LiteLLM & dbt Schema Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate YAML configurations (LiteLLM & dbt schema.yml)
+        run: |
+          python3 -c "
+          import yaml
+          for path in ['config/litellm_config.yaml', 'guitar_analytics/dbt_project.yml', 'guitar_analytics/models/schema.yml', 'models/marts/schema.yml']:
+              with open(path, 'r', encoding='utf-8') as f:
+                  yaml.safe_load(f)
+              print(f'Validated YAML syntax: {path}')
+          "
+
+      - name: Execute Python Multi-Agent ELT & Arbitrage Workflow
+        run: python3 guitar_etl_agentic_workflow.py
