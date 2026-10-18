@@ -28,3 +28,8 @@ sre_quarantine_dlq.jsonl
 *.user
 *.userosscache
 *.sln.docstates
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
