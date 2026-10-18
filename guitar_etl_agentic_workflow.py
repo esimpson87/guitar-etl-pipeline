@@ -978,9 +978,7 @@ def run_agentic_pipeline(export_json_path: Optional[str] = None) -> Dict[str, An
 
 
 if __name__ == "__main__":
-    report = run_agentic_pipeline(
-        export_json_path="/working_dir/c_2bcd443b6732af21/artifacts/file_generation/ttl=63d/intermediate/pipeline_run_output.json"
-    )
+    report = run_agentic_pipeline()
     print("=== GUITAR-ETL-PIPELINE v2.0 EXECUTION SUMMARY ===")
     print("dbt Tests:", json.dumps(report["dbt_data_quality_tests"]))
     print("SRE Incidents Handled:", len(report["sre_incidents"]))

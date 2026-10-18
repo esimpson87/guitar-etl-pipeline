@@ -101,8 +101,18 @@ Provide `REVERB_API_KEY`, `SQL_CONNECTION_STRING`, and `GCP_KEY_PATH` in your `.
 dotnet run --project GuitarEtl.csproj
 ```
 
+### Launch the Streamlit + Plotly Agentic BI Workbench (`app.py`)
+Combine interactive **Plotly** visualizations (Fee & Profit Waterfall, Star Schema Comp Spreads, Gibson Era Valuation Curves, and LiteLLM Telemetry) with the **"Glass-Box" Semantic Kernel Chat Copilot** in a unified split-screen interface ([`app.py`](app.py)):
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+> **1-Click Cloud Hosting:** Connect this repository to [Streamlit Community Cloud](https://share.streamlit.io/) with `app.py` as the entrypoint to host a live URL for resumes and portfolios.
+
 ### Run the Autonomous Python Multi-Agent Simulation & Interactive Studio
-Execute the zero-dependency Python 3.11 4-agent ELT, SRE self-healing, and arbitrage simulation ([`guitar_etl_agentic_workflow.py`](guitar_etl_agentic_workflow.py)) or open the interactive telemetry studio ([`docs/guitar_etl_agentic_studio.html`](docs/guitar_etl_agentic_studio.html)):
+Execute the zero-dependency Python 3.11 4-agent ELT, SRE self-healing, and arbitrage simulation ([`guitar_etl_agentic_workflow.py`](guitar_etl_agentic_workflow.py)) or open the standalone HTML studio ([`docs/guitar_etl_agentic_studio.html`](docs/guitar_etl_agentic_studio.html)):
 
 ```bash
 python guitar_etl_agentic_workflow.py
