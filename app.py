@@ -114,6 +114,7 @@ def get_cached_live_scan(
         "query": res["query"],
         "live_median_comp_usd": res["live_median_comp_usd"],
         "total_live_listings": res["total_live_listings"],
+        "duplicates_removed": res.get("duplicates_removed", 0),
         "listings": [asdict(item) for item in res["listings"]],
         "external_search_links": res["external_search_links"],
     }
@@ -204,6 +205,7 @@ def get_active_listing() -> Dict[str, Any]:
             "image_urls": [],
             "description": "",
             "extra_metadata": {},
+            "audit_notes": [],
         }
     idx = max(0, min(st.session_state.selected_listing_idx, len(listings) - 1))
     return listings[idx]
@@ -222,17 +224,19 @@ def run_new_live_search(query: str) -> None:
 
 def appraise_listing_in_chat(listing: Dict[str, Any], reason_prefix: str = "Deep-Dive Inspection") -> None:
     trace_id = uuid.uuid4().hex[:16]
+    audit_notes = listing.get("audit_notes", [])
+    audit_summary = " | ".join(audit_notes) if audit_notes else f"Resolved Market Tier -> '{listing['canonical_model']}'"
     tool_steps = [
         {
             "tool": "GuitarDataPlugin.NormalizeGuitarEra",
             "input": f"title='{listing['title'][:60]}', platform='{listing['platform']}'",
-            "output": f"Resolved Market Tier -> '{listing['canonical_model']}'",
+            "output": f"Exact Sub-Model Match -> '{listing['canonical_model']}'",
             "latency_ms": 1.6,
         },
         {
             "tool": "GuitarDataPlugin.GetMarketStatsAsync",
             "input": f"canonicalModel='{listing['canonical_model']}'",
-            "output": f"Estimated Resale Comp=${listing['estimated_comp_usd']:,.2f}",
+            "output": f"Sub-Model Resale Comp=${listing['estimated_comp_usd']:,.2f} ({audit_summary[:140]})",
             "latency_ms": 24.8,
         },
         {
@@ -249,13 +253,19 @@ def appraise_listing_in_chat(listing: Dict[str, Any], reason_prefix: str = "Deep
         },
     ]
 
+    audit_bullet_block = ""
+    if audit_notes:
+        formatted_notes = "\n".join(f"  - {note}" for note in audit_notes)
+        audit_bullet_block = f"- **Post Investigation & Valuation Audit:**\n{formatted_notes}\n"
+
     reply = (
         f"### 🔍 {reason_prefix}: **{listing['title']}**\n"
         f"- **Platform & ID:** `{listing['platform']}` (`{listing['listing_id']}`) • **Location:** `{listing['location']}`\n"
-        f"- **Resolved Market Tier:** `{listing['canonical_model']}` (Condition: `{listing['condition']}`)\n"
+        f"- **Exact Sub-Model Comp Tier:** `{listing['canonical_model']}` (Condition: `{listing['condition']}`)\n"
         f"- **All-In Cost Breakdown:** Ask `${listing['ask_price_usd']:,.2f}` + Shipping `${listing['shipping_usd']:,.2f}` "
         f"+ Bench Setup `${listing['bench_setup_usd']:,.2f}` = **`${listing['all_in_cost_usd']:,.2f}`**\n"
-        f"- **Expected Resale Comp:** `${listing['estimated_comp_usd']:,.2f}` (less `-${listing['platform_fees_usd']:,.2f}` Reverb 8.19% + $0.49 fee)\n"
+        f"- **Sub-Model Resale Comp:** `${listing['estimated_comp_usd']:,.2f}` (less `-${listing['platform_fees_usd']:,.2f}` Reverb 8.19% + $0.49 fee)\n"
+        f"{audit_bullet_block}"
         f"- **Estimated Net Flip Profit:** **`${listing['estimated_net_profit_usd']:+,.2f}`** (**`{listing['net_roi_pct']:+.1f}%` Net ROI**)\n"
         f"- **Agent Recommendation:** **`{listing['signal']}`**\n"
         f"- 🔗 [**Open Original Listing on {listing['platform']}**]({listing['listing_url']})"
@@ -409,16 +419,17 @@ report = st.session_state.pipeline_report
 
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 with kpi1:
+    dups_removed = scan_data.get("duplicates_removed", 0)
     st.metric(
         label=f"Live Deals Found ('{scan_data['query']}')",
-        value=f"{len(live_listings)} Live Listings",
-        delta="Reverb • Goodwill • Craigslist",
+        value=f"{len(live_listings)} Unique Listings",
+        delta=f"{dups_removed} Duplicates Filtered • Verified",
     )
 with kpi2:
     st.metric(
         label="Inspected Listing All-In Cost",
         value=f"${active_listing['all_in_cost_usd']:,.2f}",
-        delta=f"Ask ${active_listing['ask_price_usd']:,.0f} + Ship ${active_listing['shipping_usd']:,.0f} + $35 Setup",
+        delta=f"Ask ${active_listing['ask_price_usd']:,.0f} + Ship ${active_listing['shipping_usd']:,.0f} + ${active_listing['bench_setup_usd']:,.0f} Setup",
     )
 with kpi3:
     st.metric(
@@ -467,7 +478,7 @@ with left_col:
             comp_fig = go.Figure()
             comp_fig.add_trace(
                 go.Bar(
-                    name="All-In Cost (Ask + Ship + $35 Setup)",
+                    name="All-In Cost (Ask + Ship + Setup)",
                     x=df_live["short_label"],
                     y=df_live["all_in_cost_usd"],
                     customdata=list(range(len(df_live))),
@@ -479,14 +490,14 @@ with left_col:
             )
             comp_fig.add_trace(
                 go.Bar(
-                    name="Market Resale Comp ($)",
+                    name="Sub-Model Resale Comp ($)",
                     x=df_live["short_label"],
                     y=df_live["estimated_comp_usd"],
                     customdata=list(range(len(df_live))),
                     marker_color="#38bdf8",
                     text=[f"${v:,.0f}" for v in df_live["estimated_comp_usd"]],
                     textposition="auto",
-                    hovertemplate="<b>%{x}</b><br>Resale Comp: $%{y:,.2f}<br><i>Click bar to inspect photos & listing!</i><extra></extra>",
+                    hovertemplate="<b>%{x}</b><br>Sub-Model Resale Comp: $%{y:,.2f}<br><i>Click bar to inspect photos & listing!</i><extra></extra>",
                 )
             )
             comp_fig.add_trace(
@@ -515,7 +526,7 @@ with left_col:
                 margin=dict(l=20, r=20, t=30, b=65),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 yaxis_title="USD ($)",
-                 xaxis_tickangle=-18,
+                xaxis_tickangle=-18,
                 clickmode="event+select",
             )
 
@@ -544,7 +555,7 @@ with left_col:
 
             # Also provide a quick dropdown selector right above the deep-dive card
             listing_Labels = [
-                f"#{i+1} [{item['platform']}] {item['title'][:58]} — All-In: ${item['all_in_cost_usd']:,.2f} | Net: ${item['estimated_net_profit_usd']:+,.2f} ({item['net_roi_pct']:+.1f}%)"
+                f"#{i+1} [{item['platform']}] {item['title'][:58]} — All-In: ${item['all_in_cost_usd']:,.2f} | Comp: ${item['estimated_comp_usd']:,.0f} | Net: ${item['estimated_net_profit_usd']:+,.2f} ({item['net_roi_pct']:+.1f}%)"
                 for i, item in enumerate(live_listings)
             ]
             chosen_idx = st.selectbox(
@@ -606,8 +617,11 @@ with left_col:
                 m2.metric("Inbound Shipping", f"${active_listing['shipping_usd']:,.2f}")
 
                 m3, m4 = st.columns(2)
-                m3.metric("All-In Cost (w/ $35 Setup)", f"${active_listing['all_in_cost_usd']:,.2f}")
-                m4.metric("Market Resale Comp", f"${active_listing['estimated_comp_usd']:,.2f}")
+                m3.metric(
+                    f"All-In Cost (w/ ${active_listing['bench_setup_usd']:,.0f} Setup)",
+                    f"${active_listing['all_in_cost_usd']:,.2f}",
+                )
+                m4.metric("Sub-Model Resale Comp", f"${active_listing['estimated_comp_usd']:,.2f}")
 
                 m5, m6 = st.columns(2)
                 m5.metric("Reverb Selling Fees", f"-${active_listing['platform_fees_usd']:,.2f}")
@@ -617,11 +631,17 @@ with left_col:
                     delta=f"{active_listing['net_roi_pct']:+.1f}% ROI ({active_listing['signal']})",
                 )
 
-                st.markdown(f"**Resolved Market Tier:** `{active_listing['canonical_model']}`")
+                st.markdown(f"**Matched Sub-Model Tier:** `{active_listing['canonical_model']}`")
                 extra = active_listing.get("extra_metadata", {})
                 if extra:
                     meta_lines = [f"- **{k}:** `{v}`" for k, v in extra.items() if v]
                     st.markdown("\n".join(meta_lines))
+
+                audit_notes = active_listing.get("audit_notes", [])
+                if audit_notes:
+                    st.markdown("**🔍 Post Investigation & Valuation Audit:**")
+                    for note in audit_notes:
+                        st.caption(f"• {note}")
 
                 st.link_button(
                     f"🛒 Open Live Listing on {active_listing['platform']} ↗",
