@@ -151,6 +151,54 @@ REPAIR_RISK_KEYWORDS = (
 )
 
 
+CUSTOM_SHOP_POLLUTION_KEYWORDS = (
+    "custom shop",
+    "murphy lab",
+    "murphy",
+    "historic",
+    "true historic",
+    "reissue",
+    "vos",
+    "collector's choice",
+    "collectors choice",
+    "brazilian",
+    "stinger",
+    "masterbuilt",
+    "master built",
+    "team built",
+    "heavy relic",
+    "journeyman",
+    "time machine",
+    "cunetto",
+    "private stock",
+    "wood library",
+    "artist package",
+    "golden era",
+    "marquis",
+    "pre-war",
+    "signed",
+    "autographed",
+    "prototype",
+)
+
+# Matches Historic Reissue codes (R4, R6, R7, R8, R9, R0, '54, '56, '57, '58, '59, '60) or vintage years 1930-1989
+HISTORIC_OR_VINTAGE_PATTERN = re.compile(
+    r"\b(r[467890]|19[3-8]\d|'5[246789]|'6[0-58]|57\s+goldtop|58\s+les\s+paul|59\s+les\s+paul)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_custom_shop_or_vintage_title(text: str) -> bool:
+    lower = text.lower()
+    # Strip modern production model names that include '1960' or '50s'/'60s' (e.g. 'Les Paul 1960 Classic', 'Standard 50s')
+    lower_clean = re.sub(r"\b(1960\s+classic|classic\s+1960|standard\s+[56]0s|[56]0s\s+standard)\b", " ", lower)
+    if any(kw in lower_clean for kw in CUSTOM_SHOP_POLLUTION_KEYWORDS):
+        return True
+    if HISTORIC_OR_VINTAGE_PATTERN.search(lower_clean):
+        return True
+    return False
+
+
 @dataclass
 class LiveGuitarListing:
     listing_id: str
@@ -178,7 +226,34 @@ class LiveGuitarListing:
 
 def _is_valid_guitar_title(title: str) -> bool:
     lower = title.lower()
-    return not any(bad in lower for bad in EXCLUDE_KEYWORDS)
+    if any(bad in lower for bad in EXCLUDE_KEYWORDS):
+        return False
+    # Exclude standalone guitar case listings (e.g. 'Canadian Made Gibson Les Paul Standard-Custom Case')
+    # unless the title indicates a guitar WITH case ('w/ case', 'with case', 'ohsc', 'includes case', 'original case')
+    if "case" in lower and not any(
+        ok in lower for ok in ("with case", "w/ case", "w/case", "w case", "ohsc", "includes case", "with hard", "w/ hard", "with original")
+    ):
+        if any(
+            ck in lower
+            for ck in ("custom case", "les paul case", "strat case", "tele case", "acoustic case", "fitted case", "plush case", "canadian made")
+        ) or lower.strip(" !.").endswith("case"):
+            return False
+    return True
+
+
+def _is_reverb_guitar_category(item: Dict[str, Any]) -> bool:
+    """
+    Ensures a Reverb API listing belongs to the Guitars category and not Cases, Gig Bags, Parts, or Accessories.
+    """
+    cats = item.get("categories", [])
+    if not cats:
+        return True
+    full_names = " | ".join(str(c.get("full_name", "")).lower() for c in cats if isinstance(c, dict))
+    if not full_names:
+        return True
+    if any(bad_cat in full_names for bad_cat in ("accessories", "cases", "gig bags", "parts", "pickups", "amps", "amplifiers", "pedals", "merchandise")):
+        return False
+    return "guitar" in full_names
 
 
 def _strip_html(raw_html: str) -> str:
@@ -195,7 +270,7 @@ def _strip_html(raw_html: str) -> str:
 # SPECIFIC MODEL SIGNATURE EXTRACTOR & LIVE REVERB EXACT-COMP ENGINE
 # ==============================================================================
 
-_COMP_CACHE: Dict[str, Tuple[float, float, int]] = {}
+_COMP_CACHE: Dict[str, Tuple[float, float, int, int]] = {}
 
 
 def extract_specific_model_query(
@@ -227,16 +302,21 @@ def extract_specific_model_query(
             continue
         if low in NOISE_WORDS:
             continue
-        if low.isdigit() and low not in {"335", "339", "175", "18", "28", "15", "24", "550", "450", "350"}:
+        if low.isdigit() and low not in {"335", "339", "175", "18", "28", "15", "24", "550", "450", "350", "50", "60"}:
             continue
         if low not in [k.lower() for k in kept]:
             kept.append(tok)
         if len(kept) >= 5:
             break
 
-    if len(kept) >= 2:
-        return " ".join(kept)
-    return title[:45].strip()
+    result = " ".join(kept) if len(kept) >= 2 else title[:45].strip()
+    res_low = result.lower()
+    # Infer brand prefix when seller writes 'Les Paul Standard 60s' or 'Player Stratocaster' without brand
+    if "les paul" in res_low and not any(b in res_low for b in ("gibson", "epiphone", "chibson", "replica", "maestro")):
+        result = f"Gibson {result}"
+    elif ("stratocaster" in res_low or "telecaster" in res_low) and not any(b in res_low for b in ("fender", "squier", "squire", "starcaster")):
+        result = f"Fender {result}"
+    return result
 
 
 def _has_specific_model_token(specific_model_query: str) -> bool:
@@ -251,32 +331,41 @@ def _has_specific_model_token(specific_model_query: str) -> bool:
 
 def lookup_live_reverb_comp_for_model(
     specific_model_query: str,
+    source_title: str = "",
     exclude_listing_id: str = "",
-) -> Tuple[float, float, int]:
+) -> Tuple[float, float, int, int]:
     """
     Queries Reverb's live used listings for the exact extracted model signature
-    (e.g., 'Martin LXK2 Little Martin'):
-      1. Filters out comps whose titles don't match the model tokens.
-      2. Filters out stray parts/outliers (< 45% or > 200% of raw median).
-      3. Applies a 12% sold-realization discount (0.88 * clean_median) so the comp
-         reflects realistic actual sold prices rather than optimistic asking prices.
+    and prevents Custom Shop / Murphy Lab / Historic / Vintage data pollution:
+      1. Filters out comps whose titles don't match the model tokens or Guitar categories.
+      2. Unless the source listing itself is a verified Custom Shop / Historic / Vintage guitar,
+         discards all Reverb comps containing 'Custom Shop', 'Murphy Lab', 'Historic',
+         'Reissue', 'VOS', 'R4/R6/R7/R8/R9/R0', 'Masterbuilt', 'Private Stock', or 1930-1989 vintage years.
+      3. Enforces sub-brand isolation (e.g. Squier vs Fender, Epiphone vs Gibson, PRS SE vs PRS Core).
+      4. Applies a 12% sold-realization discount (0.88 * clean_median) and caps standard production
+         models against their sub-model retail/tier ceiling so comps never exceed brand-new retail.
+    Returns: (realized_sold_comp, clean_median_ask, valid_comp_count, polluted_excluded_count)
     """
-    if not _has_specific_model_token(specific_model_query):
-        _, fallback_val = _heuristic_tier_comp(specific_model_query)
-        return (fallback_val, fallback_val, 0)
+    ref_text = f"{source_title} {specific_model_query}".strip()
+    _, heuristic_val = _heuristic_tier_comp(ref_text)
 
-    cache_key = specific_model_query.lower().strip()
+    if not _has_specific_model_token(specific_model_query):
+        return (heuristic_val, heuristic_val, 0, 0)
+
+    source_is_custom_or_vintage = _is_custom_shop_or_vintage_title(ref_text)
+    cache_key = f"{specific_model_query.lower().strip()}::cs={int(source_is_custom_or_vintage)}"
     if cache_key in _COMP_CACHE:
         return _COMP_CACHE[cache_key]
 
     headers = {
         "Accept-Version": "3.0",
         "Accept": "application/hal+json",
-        "User-Agent": "GuitarEtl-ExactCompEngine/2.0",
+        "User-Agent": "GuitarEtl-ExactCompEngine/2.1",
     }
     encoded = urllib.parse.quote(specific_model_query)
-    url = f"https://api.reverb.com/api/listings/all?query={encoded}&condition=used&per_page=24"
+    url = f"https://api.reverb.com/api/listings/all?query={encoded}&condition=used&per_page=30"
 
+    polluted_excluded = 0
     try:
         r = requests.get(url, headers=headers, timeout=6)
         if r.status_code == 200:
@@ -286,15 +375,34 @@ def lookup_live_reverb_comp_for_model(
                 for t in re.findall(r"[A-Za-z0-9]+", specific_model_query)
                 if len(t) >= 2 and t.lower() not in {"guitar", "used", "by", "the"}
             ]
+            ref_low = ref_text.lower()
             matched_prices: List[float] = []
+
             for item in listings:
                 item_id = str(item.get("id", ""))
                 if exclude_listing_id and item_id == exclude_listing_id.replace("REV-", ""):
+                    continue
+                if not _is_reverb_guitar_category(item):
                     continue
                 item_title = item.get("title", "")
                 if not _is_valid_guitar_title(item_title):
                     continue
                 title_low = item_title.lower()
+
+                # 1. Prevent Custom Shop / Murphy Lab / Historic / Reissue / VOS / Vintage pollution
+                if not source_is_custom_or_vintage and _is_custom_shop_or_vintage_title(item_title):
+                    polluted_excluded += 1
+                    continue
+
+                # 2. Prevent sub-brand cross-pollution (Squier <-> Fender, Epiphone <-> Gibson, SE <-> Core)
+                if ("squier" in ref_low or "squire" in ref_low) != ("squier" in title_low or "squire" in title_low):
+                    continue
+                if ("epiphone" in ref_low) != ("epiphone" in title_low):
+                    continue
+                if "prs" in ref_low and ((" se " in f" {ref_low} ") != (" se " in f" {title_low} ")):
+                    continue
+
+                # 3. Require token overlap with extracted model signature
                 if query_tokens:
                     matches = sum(1 for qt in query_tokens[:3] if qt in title_low)
                     if matches < min(2, len(query_tokens)):
@@ -305,27 +413,36 @@ def lookup_live_reverb_comp_for_model(
                     try:
                         p_val = float(p_str)
                         if p_val >= 65.0:
+                            # Also reject individual comp outliers that exceed 1.45x of standard tier baseline
+                            # when the source guitar is a standard production model
+                            if not source_is_custom_or_vintage and heuristic_val >= 300.0 and p_val > heuristic_val * 1.45:
+                                polluted_excluded += 1
+                                continue
                             matched_prices.append(p_val)
                     except ValueError:
                         pass
 
             if len(matched_prices) >= 3:
                 raw_med = statistics.median(matched_prices)
-                # Keep core cluster (0.45x to 1.85x of raw median) to strip parts & vintage museum pieces
-                core_prices = [p for p in matched_prices if 0.45 * raw_med <= p <= 1.85 * raw_med]
+                core_prices = [p for p in matched_prices if 0.50 * raw_med <= p <= 1.55 * raw_med]
                 if len(core_prices) < 2:
                     core_prices = matched_prices
                 clean_median_ask = round(statistics.median(core_prices), 2)
-                # Realized sold price is typically ~88% of active Reverb asking median
                 realized_sold_comp = round(clean_median_ask * 0.88, 2)
-                res = (realized_sold_comp, clean_median_ask, len(core_prices))
+
+                # Final retail sanity ceiling for non-Custom-Shop production models
+                if not source_is_custom_or_vintage and heuristic_val >= 300.0:
+                    max_used_ceiling = round(heuristic_val * 1.15, 2)
+                    if realized_sold_comp > max_used_ceiling:
+                        realized_sold_comp = max_used_ceiling
+
+                res = (realized_sold_comp, clean_median_ask, len(core_prices), polluted_excluded)
                 _COMP_CACHE[cache_key] = res
                 return res
     except Exception:
         pass
 
-    _, fallback_val = _heuristic_tier_comp(specific_model_query)
-    res = (fallback_val, fallback_val, 0)
+    res = (heuristic_val, heuristic_val, 0, polluted_excluded)
     _COMP_CACHE[cache_key] = res
     return res
 
@@ -369,19 +486,33 @@ def _heuristic_tier_comp(title: str) -> Tuple[str, float]:
             return ("Epiphone Entry / Special Series", 145.00)
         return ("Epiphone Standard Series", 385.00)
 
-    if "gibson" in lower:
+    is_gibson_family = "gibson" in lower or (
+        ("les paul" in lower or "sg standard" in lower)
+        and not any(x in lower for x in ("epiphone", "chibson", "replica", "clone", "copy", "maestro"))
+    )
+    if is_gibson_family:
         if "les paul custom" in lower:
             return ("Gibson Les Paul Custom (USA)", 3350.00)
-        if "les paul standard" in lower:
+        if "les paul standard" in lower or "standard 50s" in lower or "standard 60s" in lower:
             return ("Gibson Les Paul Standard (USA)", 2150.00)
-        if "studio" in lower or "tribute" in lower or "faded" in lower or "special" in lower:
+        if "traditional" in lower:
+            return ("Gibson Les Paul Traditional (USA)", 1895.00)
+        if "classic" in lower:
+            return ("Gibson Les Paul Classic (USA)", 1750.00)
+        if "junior" in lower or "les paul special" in lower:
+            return ("Gibson Les Paul Junior / Special (USA)", 1250.00)
+        if "studio" in lower or "tribute" in lower or "faded" in lower:
             return ("Gibson Les Paul Studio / Tribute (USA)", 995.00)
         if "sg standard" in lower:
             return ("Gibson SG Standard (USA)", 1395.00)
         return ("Gibson USA Electric", 1450.00)
 
-    if "fender" in lower:
-        if "american professional" in lower or "american pro" in lower or "american standard" in lower or "american performer" in lower:
+    is_fender_family = "fender" in lower or (
+        ("stratocaster" in lower or "telecaster" in lower)
+        and not any(x in lower for x in ("squier", "squire", "starcaster", "partscaster", "replica"))
+    )
+    if is_fender_family:
+        if "american professional" in lower or "american pro" in lower or "american standard" in lower or "american performer" in lower or "american ultra" in lower:
             return ("Fender American Pro / Standard (USA)", 1250.00)
         if "japan" in lower or "mij" in lower or "cij" in lower:
             return ("Fender MIJ / Japan Series", 950.00)
@@ -431,22 +562,28 @@ def investigate_and_score_listing(
 
     specific_model_query = extract_specific_model_query(title, make_hint, model_hint)
     tier_label, heuristic_comp = _heuristic_tier_comp(title)
-    realized_comp, median_ask_comp, comp_count = lookup_live_reverb_comp_for_model(
-        specific_model_query, exclude_listing_id=listing_id
+    realized_comp, median_ask_comp, comp_count, polluted_excluded = lookup_live_reverb_comp_for_model(
+        specific_model_query, source_title=title, exclude_listing_id=listing_id
     )
+
+    if polluted_excluded > 0:
+        audit_notes.append(
+            f"[Data Pollution Guard] Excluded {polluted_excluded} Custom Shop / Historic Reissue / Vintage / Outlier "
+            f"listings from '{specific_model_query}' comp pool."
+        )
 
     if comp_count >= 3:
         estimated_comp = realized_comp
-        canonical_label = f"{specific_model_query} ({comp_count} Exact Comps)"
+        canonical_label = f"{specific_model_query} ({comp_count} Clean Comps)"
         audit_notes.append(
-            f"[Exact-Model Match] Matched {comp_count} used '{specific_model_query}' listings on Reverb "
-            f"(Median Ask: ${median_ask_comp:,.2f} -> Realized Sold Comp @ 88%: ${realized_comp:,.2f})."
+            f"[Exact-Model Match] Matched {comp_count} standard used '{specific_model_query}' listings on Reverb "
+            f"(Clean Median Ask: ${median_ask_comp:,.2f} -> Realized Sold Comp @ 88%: ${realized_comp:,.2f})."
         )
     else:
         estimated_comp = heuristic_comp
         canonical_label = tier_label
         audit_notes.append(
-            f"[Sub-Model Tier Match] Classified as '{tier_label}' (Conservative Sold Comp: ${heuristic_comp:,.2f})."
+            f"[Sub-Model Tier Match] Classified as '{tier_label}' (Standard Used Comp: ${heuristic_comp:,.2f})."
         )
 
     # Check for Replica / Partscaster / Custom Build / Suspiciously Cheap Custom Shop claims
@@ -600,6 +737,8 @@ def fetch_live_reverb_listings(query: str, max_items: int = 4) -> Tuple[List[Liv
         prices = []
 
         for item in raw_listings:
+            if not _is_reverb_guitar_category(item):
+                continue
             title = item.get("title", "")
             if not _is_valid_guitar_title(title):
                 continue
