@@ -51,5 +51,5 @@ jobs:
 
       - name: Compile Streamlit App & Execute Python Multi-Agent Workflow
         run: |
-          python3 -m py_compile app.py guitar_etl_agentic_workflow.py
+          python3 -m py_compile app.py live_marketplace_scanner.py guitar_etl_agentic_workflow.py
           python3 guitar_etl_agentic_workflow.py
