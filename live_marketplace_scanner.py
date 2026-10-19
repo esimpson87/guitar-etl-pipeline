@@ -329,41 +329,56 @@ def _has_specific_model_token(specific_model_query: str) -> bool:
     return len(non_generic) >= 1
 
 
+def normalize_condition_tier(cond_text: str) -> str:
+    """Normalizes raw condition strings into standard used market tiers."""
+    c = cond_text.lower()
+    if "mint" in c or "like new" in c:
+        return "Mint"
+    if "excellent" in c or "near mint" in c:
+        return "Excellent"
+    if "very good" in c or "vg" in c:
+        return "Very Good"
+    if "fair" in c or "poor" in c or "for parts" in c:
+        return "Fair"
+    if "good" in c or "used" in c or "thrift" in c or "uninspected" in c or "player" in c:
+        return "Good"
+    return "Very Good"
+
+
 def lookup_live_reverb_comp_for_model(
     specific_model_query: str,
     source_title: str = "",
+    target_condition: str = "Used",
     exclude_listing_id: str = "",
-) -> Tuple[float, float, int, int]:
+) -> Tuple[float, str, int, int]:
     """
-    Queries Reverb's live used listings for the exact extracted model signature
-    and prevents Custom Shop / Murphy Lab / Historic / Vintage data pollution:
-      1. Filters out comps whose titles don't match the model tokens or Guitar categories.
-      2. Unless the source listing itself is a verified Custom Shop / Historic / Vintage guitar,
-         discards all Reverb comps containing 'Custom Shop', 'Murphy Lab', 'Historic',
-         'Reissue', 'VOS', 'R4/R6/R7/R8/R9/R0', 'Masterbuilt', 'Private Stock', or 1930-1989 vintage years.
-      3. Enforces sub-brand isolation (e.g. Squier vs Fender, Epiphone vs Gibson, PRS SE vs PRS Core).
-      4. Applies a 12% sold-realization discount (0.88 * clean_median) and caps standard production
-         models against their sub-model retail/tier ceiling so comps never exceed brand-new retail.
-    Returns: (realized_sold_comp, clean_median_ask, valid_comp_count, polluted_excluded_count)
+    Queries Reverb's live listings for the exact extracted model signature and calculates
+    the actual median resale comp based on genuine used condition (strictly excluding Brand New):
+      1. Strictly discards all 'Brand New' / retail MAP listings to prevent new retail inflation.
+      2. Discards Custom Shop / Murphy Lab / Historic Reissue / Vintage outliers unless the source is Custom/Vintage.
+      3. Categorizes clean used comps by condition (Mint, Excellent, Very Good, Good, Fair).
+      4. Calculates the actual median sold comp for the matching condition tier (without arbitrary percentage discounts).
+    Returns: (condition_resale_comp, condition_matched_label, comp_count, excluded_count)
     """
     ref_text = f"{source_title} {specific_model_query}".strip()
     _, heuristic_val = _heuristic_tier_comp(ref_text)
 
     if not _has_specific_model_token(specific_model_query):
-        return (heuristic_val, heuristic_val, 0, 0)
+        return (heuristic_val, "Star Schema Baseline", 0, 0)
 
     source_is_custom_or_vintage = _is_custom_shop_or_vintage_title(ref_text)
-    cache_key = f"{specific_model_query.lower().strip()}::cs={int(source_is_custom_or_vintage)}"
+    target_tier = normalize_condition_tier(target_condition)
+    cache_key = f"{specific_model_query.lower().strip()}::cs={int(source_is_custom_or_vintage)}::cond={target_tier}"
     if cache_key in _COMP_CACHE:
         return _COMP_CACHE[cache_key]
 
     headers = {
         "Accept-Version": "3.0",
         "Accept": "application/hal+json",
-        "User-Agent": "GuitarEtl-ExactCompEngine/2.1",
+        "User-Agent": "GuitarEtl-ExactCompEngine/2.2",
     }
     encoded = urllib.parse.quote(specific_model_query)
-    url = f"https://api.reverb.com/api/listings/all?query={encoded}&condition=used&per_page=30"
+    url = f"https://api.reverb.com/api/listings/all?query={encoded}&condition=used&per_page=35"
 
     polluted_excluded = 0
     try:
@@ -376,7 +391,7 @@ def lookup_live_reverb_comp_for_model(
                 if len(t) >= 2 and t.lower() not in {"guitar", "used", "by", "the"}
             ]
             ref_low = ref_text.lower()
-            matched_prices: List[float] = []
+            matched_prices_with_tier: List[Tuple[str, float]] = []
 
             for item in listings:
                 item_id = str(item.get("id", ""))
@@ -384,17 +399,26 @@ def lookup_live_reverb_comp_for_model(
                     continue
                 if not _is_reverb_guitar_category(item):
                     continue
+
+                # 1. Strictly exclude Brand New items from used comp calculation
+                cond_obj = item.get("condition") or {}
+                cond_slug = str(cond_obj.get("slug") or "").lower()
+                cond_display = str(cond_obj.get("display_name") or "").lower()
+                if "brand-new" in cond_slug or cond_slug == "new" or "brand new" in cond_display or cond_display == "new":
+                    polluted_excluded += 1
+                    continue
+
                 item_title = item.get("title", "")
                 if not _is_valid_guitar_title(item_title):
                     continue
                 title_low = item_title.lower()
 
-                # 1. Prevent Custom Shop / Murphy Lab / Historic / Reissue / VOS / Vintage pollution
+                # 2. Prevent Custom Shop / Murphy Lab / Historic / Reissue / VOS / Vintage pollution
                 if not source_is_custom_or_vintage and _is_custom_shop_or_vintage_title(item_title):
                     polluted_excluded += 1
                     continue
 
-                # 2. Prevent sub-brand cross-pollution (Squier <-> Fender, Epiphone <-> Gibson, SE <-> Core)
+                # 3. Prevent sub-brand cross-pollution (Squier <-> Fender, Epiphone <-> Gibson, SE <-> Core)
                 if ("squier" in ref_low or "squire" in ref_low) != ("squier" in title_low or "squire" in title_low):
                     continue
                 if ("epiphone" in ref_low) != ("epiphone" in title_low):
@@ -402,7 +426,7 @@ def lookup_live_reverb_comp_for_model(
                 if "prs" in ref_low and ((" se " in f" {ref_low} ") != (" se " in f" {title_low} ")):
                     continue
 
-                # 3. Require token overlap with extracted model signature
+                # 4. Require token overlap with extracted model signature
                 if query_tokens:
                     matches = sum(1 for qt in query_tokens[:4] if qt in title_low)
                     if matches < min(3, len(query_tokens)):
@@ -413,35 +437,51 @@ def lookup_live_reverb_comp_for_model(
                     try:
                         p_val = float(p_str)
                         if p_val >= 65.0:
-                            # Reject individual comp outliers that exceed 1.45x of standard tier baseline
+                            # Reject individual vintage/museum outliers that exceed 1.45x of standard tier baseline
                             if not source_is_custom_or_vintage and heuristic_val >= 110.0 and p_val > heuristic_val * 1.45:
                                 polluted_excluded += 1
                                 continue
-                            matched_prices.append(p_val)
+                            item_tier = normalize_condition_tier(cond_display or cond_slug)
+                            matched_prices_with_tier.append((item_tier, p_val))
                     except ValueError:
                         pass
 
-            if len(matched_prices) >= 3:
-                raw_med = statistics.median(matched_prices)
-                core_prices = [p for p in matched_prices if 0.50 * raw_med <= p <= 1.55 * raw_med]
-                if len(core_prices) < 2:
-                    core_prices = matched_prices
-                clean_median_ask = round(statistics.median(core_prices), 2)
-                realized_sold_comp = round(clean_median_ask * 0.88, 2)
+            if matched_prices_with_tier:
+                # Group clean used comps by condition tier
+                tier_prices = [p for tier, p in matched_prices_with_tier if tier == target_tier]
+                condition_label = f"Matched {target_tier} Condition"
 
-                # Final retail sanity ceiling for non-Custom-Shop production models
-                if not source_is_custom_or_vintage and heuristic_val >= 110.0:
-                    max_used_ceiling = round(heuristic_val * 1.15, 2)
-                    if realized_sold_comp > max_used_ceiling:
-                        realized_sold_comp = max_used_ceiling
+                # Expand to adjacent condition tiers if sample size in exact tier is small (< 2)
+                if len(tier_prices) < 2:
+                    if target_tier in ("Mint", "Excellent"):
+                        tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Mint", "Excellent")]
+                        condition_label = "Mint / Excellent Condition"
+                    elif target_tier in ("Very Good", "Good"):
+                        tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Very Good", "Good")]
+                        condition_label = "Very Good / Good Condition"
+                    elif target_tier == "Fair":
+                        tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Fair", "Good")]
+                        condition_label = "Fair / Good Condition"
 
-                res = (realized_sold_comp, clean_median_ask, len(core_prices), polluted_excluded)
-                _COMP_CACHE[cache_key] = res
-                return res
+                # If still small, use all genuine used listings (strictly excluding Brand New)
+                if len(tier_prices) < 2:
+                    tier_prices = [p for _, p in matched_prices_with_tier]
+                    condition_label = "Overall Used Market Median"
+
+                if len(tier_prices) >= 2:
+                    raw_med = statistics.median(tier_prices)
+                    core_prices = [p for p in tier_prices if 0.50 * raw_med <= p <= 1.55 * raw_med]
+                    if not core_prices:
+                        core_prices = tier_prices
+                    used_condition_comp = round(statistics.median(core_prices), 2)
+
+                    res = (used_condition_comp, condition_label, len(core_prices), polluted_excluded)
+                    _COMP_CACHE[cache_key] = res
+                    return res
     except Exception:
         pass
 
-    res = (heuristic_val, heuristic_val, 0, polluted_excluded)
+    res = (heuristic_val, "Standard Used Baseline", 0, polluted_excluded)
     _COMP_CACHE[cache_key] = res
     return res
 
@@ -563,22 +603,25 @@ def investigate_and_score_listing(
 
     specific_model_query = extract_specific_model_query(title, make_hint, model_hint)
     tier_label, heuristic_comp = _heuristic_tier_comp(title)
-    realized_comp, median_ask_comp, comp_count, polluted_excluded = lookup_live_reverb_comp_for_model(
-        specific_model_query, source_title=title, exclude_listing_id=listing_id
+    used_comp, condition_label, comp_count, polluted_excluded = lookup_live_reverb_comp_for_model(
+        specific_model_query,
+        source_title=title,
+        target_condition=condition,
+        exclude_listing_id=listing_id,
     )
 
     if polluted_excluded > 0:
         audit_notes.append(
-            f"[Data Pollution Guard] Excluded {polluted_excluded} Custom Shop / Historic Reissue / Vintage / Outlier "
-            f"listings from '{specific_model_query}' comp pool."
+            f"[Data Guard] Excluded {polluted_excluded} Brand New / Custom Shop / Vintage / Outlier "
+            f"listings from '{specific_model_query}' used comp pool."
         )
 
-    if comp_count >= 3:
-        estimated_comp = realized_comp
-        canonical_label = f"{specific_model_query} ({comp_count} Clean Comps)"
+    if comp_count >= 2:
+        estimated_comp = used_comp
+        canonical_label = f"{specific_model_query} ({comp_count} Used Comps)"
         audit_notes.append(
-            f"[Exact-Model Match] Matched {comp_count} standard used '{specific_model_query}' listings on Reverb "
-            f"(Clean Median Ask: ${median_ask_comp:,.2f} -> Realized Sold Comp @ 88%: ${realized_comp:,.2f})."
+            f"[Used Condition Comp] Evaluated genuine used '{specific_model_query}' listings (Brand New strictly excluded). "
+            f"{condition_label} -> Resale Comp: ${used_comp:,.2f}."
         )
     else:
         estimated_comp = heuristic_comp
