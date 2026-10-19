@@ -173,7 +173,7 @@ def get_cached_live_scan(
     include_goodwill: bool,
     include_craigslist: bool,
     max_per_platform: int = 5,
-    scanner_version: str = "v2.4-vision",
+    scanner_version: str = "v2.5-ocr-model-resolver",
 ) -> Dict[str, Any]:
     res = scan_all_live_platforms(
         query=query,
@@ -1008,10 +1008,14 @@ with tab_live:
             else:
                 st.info("No images attached to this listing.")
 
-            # Computer-Vision Image Condition & Model Extraction Box
+            # Computer-Vision Image Condition & Photo OCR Model Extraction Box
+            meta_dict = active_listing.get("extra_metadata") or {}
+            ocr_note = meta_dict.get("Model Resolution & Photo OCR", "")
+            ocr_raw = meta_dict.get("Photo OCR Text Detected", "")
+
             st.markdown("<div class='vision-scan-box'>", unsafe_allow_html=True)
             st.markdown(
-                f"#### 👁️ Image Condition & Visual Model Scan ({imgs_scanned} Photo(s) Analyzed)"
+                f"#### 👁️ Image Condition & Photo-OCR Model Scan ({imgs_scanned} Photo(s) Analyzed)"
             )
             vc1, vc2, vc3 = st.columns(3)
             vc1.metric(
@@ -1029,6 +1033,10 @@ with tab_live:
                 f"{vis_adj_pct:+.1f}%",
                 delta=f"{vis_delta:+,.2f} to Used Comp",
             )
+            if ocr_note:
+                st.markdown(f"- **🎯 Sub-Brand & Photo Model Resolver:** {ocr_note}")
+            if ocr_raw:
+                st.markdown(f"- **🔤 Photo OCR Faceplate / Label Text:** `{ocr_raw}`")
             if vis_wear:
                 st.markdown(f"- **🔬 Surface & Wear Analysis:** {vis_wear}")
             if vis_insights or vis_finish:

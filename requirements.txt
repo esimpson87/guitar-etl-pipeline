@@ -5,3 +5,4 @@ pyyaml>=6.0.1
 requests>=2.31.0
 pillow>=10.0.0
 numpy>=1.26.0
+winocr>=0.0.15; sys_platform == 'win32'

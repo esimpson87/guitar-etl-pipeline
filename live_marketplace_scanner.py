@@ -25,6 +25,11 @@ import numpy as np
 from PIL import Image
 import requests
 
+try:
+    import winocr as _winocr
+except Exception:
+    _winocr = None
+
 REVERB_FEE_RATE = 0.0819
 REVERB_FIXED_FEE_USD = 0.49
 DEFAULT_BENCH_SETUP_USD = 35.00
@@ -317,22 +322,40 @@ AMP_EXCLUDE_KEYWORDS = (
     "handle only",
     "caster",
     "logo badge",
+    "part:",
+    "power cord",
+    "control knob",
+    "knob cap",
+    "hss pack",
+    "sss pack",
+    "guitar pack",
+    "starter pack",
+    "gig bag",
+    "with guitar",
+    "preamp pedal",
+    "amp pedal",
+    "amp simulator",
+    "style preamp",
+    "fender style",
+    "marshall style",
+    "vox style",
 )
 
 NOISE_WORDS = {
     "electric", "acoustic", "guitar", "guitars", "6-string", "6", "string",
     "pedal", "pedals", "effects", "effect", "stompbox", "microphone", "mic", "amplifier", "amp",
-    "with", "w/", "w", "ohsc", "case", "hardshell", "hard", "gig", "bag", "gigbag",
-    "sunburst", "burst", "black", "white", "red", "blue", "green", "yellow",
+    "with", "w/", "w", "ohsc", "hsc", "case", "hardshell", "hard", "gig", "bag", "gigbag", "cover",
+    "sunburst", "burst", "black", "white", "red", "blue", "green", "yellow", "brown",
     "natural", "blonde", "gold", "silver", "metallic", "olympic", "candy", "apple",
     "cherry", "tobacco", "honey", "amber", "ebony", "wine", "alpine", "vintage",
     "pattern", "hpl", "koa", "spruce", "mahogany", "maple", "rosewood", "pau", "ferro",
     "fingerboard", "fretboard", "neck", "body", "top", "figured", "flamed", "quilted",
     "excellent", "mint", "good", "fair", "condition", "used", "new", "brand",
     "tested", "not", "untested", "working", "great", "nice", "rare",
-    "ed", "edition", "series", "collection", "the", "by", "in", "for", "sale",
+    "ed", "edition", "series", "collection", "the", "by", "in", "for", "sale", "of", "month", "week",
     "and", "or", "includes", "included", "free", "shipping", "fast", "local", "pickup",
-    "cond", "mint", "trade", "survivor", "box", "power", "supply",
+    "cond", "mint", "trade", "survivor", "box", "power", "supply", "price", "reduced",
+    "pre-owned", "preowned", "second", "hand", "chord", "book", "portable", "textured",
     "weird", "cool", "crazy", "sweet", "awesome", "vintage", "old", "custom", "funky",
     "rms", "compact", "combo", "gain", "eq", "controls", "control", "channel", "channels",
     "speaker", "speakers", "solid", "state", "amplifier", "amplifiers", "amp", "amps",
@@ -603,46 +626,144 @@ def _strip_html(raw_html: str) -> str:
 
 
 # ==============================================================================
-# SPECIFIC MODEL SIGNATURE EXTRACTOR & LIVE REVERB EXACT-COMP ENGINE
+# SPECIFIC MODEL SIGNATURE EXTRACTOR, PHOTO-OCR RESOLVER & REVERB COMP ENGINE
 # ==============================================================================
 
 _COMP_CACHE: Dict[str, Tuple[float, str, int, int]] = {}
 
 
-def extract_specific_model_query(
+def _has_word(text: str, word: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(word)}\b", text, flags=re.IGNORECASE))
+
+
+def _normalize_spelling_and_codes(text: str) -> str:
+    """
+    Normalizes common seller typos, hyphenated amp/guitar codes, and strips embedded
+    serial numbers that sellers accidentally paste into make/model fields.
+    """
+    if not text:
+        return ""
+    s = text
+    # Strip parentheticals, hashtags, and explicit serial number patterns
+    s = re.sub(r"\([^)]*\)|\[[^\]]*\]|#[A-Za-z0-9\-]+", " ", s)
+    s = re.sub(r"\b(sn|s/n|serial|item)\s*[:#]?\s*[a-z0-9\-]+\b", " ", s, flags=re.IGNORECASE)
+    # Strip 6+ digit serial numbers or slash-separated serials (e.g. 'Les Paul/22071532741', 'ES175D 00103108', 'V007561')
+    s = re.sub(r"[/\\]\s*\d{5,}\b", " ", s)
+    s = re.sub(r"\b[A-Za-z]?\d{6,12}\b", " ", s)
+    # Strip 4-digit years (except iconic model numbers 1959, 2020, 4040)
+    s = re.sub(r"\b(19[3-8]\d|199\d|20[01]\d|202[1-9])\b", " ", s)
+
+    # Fix common brand/series misspellings
+    s = re.sub(r"\bsquire\b", "Squier", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bgretch\b", "Gretsch", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bibenaz\b", "Ibanez", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bstratacaster\b|\bstratocastor\b", "Stratocaster", s, flags=re.IGNORECASE)
+    s = re.sub(r"\btelecastor\b|\btelecater\b", "Telecaster", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bfront\s+man\b", "Frontman", s, flags=re.IGNORECASE)
+
+    # Normalize hyphenated practice amp model codes: '15-G' -> '15G', '10-G' -> '10G', '15-R' -> '15R'
+    s = re.sub(r"\b(10|15|20|25|30|35|65)\s*-\s*([GgRrBb])\b", r"\1\2", s)
+    # Normalize Marshall 'DFX30' / 'DFX 30' -> 'MG30DFX', 'DFX15' -> 'MG15DFX'
+    s = re.sub(r"\bdfx\s*-?\s*(10|15|30|50|100)\b", r"MG\1DFX", s, flags=re.IGNORECASE)
+    # Normalize Gibson ES archtop codes: 'ES175D' -> 'ES-175D', 'ES335' -> 'ES-335'
+    s = re.sub(r"\bes\s*-?\s*(175|335|339|330|135|137)([A-Za-z]?)\b", r"ES-\1\2", s, flags=re.IGNORECASE)
+    # Normalize wattage suffixes: '15W' -> '15'
+    s = re.sub(r"(?<![\w\-])(\d+)\s*[-]?\s*(?:w|watt|watts)\b", r" \1 ", s, flags=re.IGNORECASE)
+    return " ".join(s.split())
+
+
+def resolve_model_and_candidate_queries(
     title: str,
     make_hint: str = "",
     model_hint: str = "",
+    ocr_text: str = "",
     item_category: str = "Guitars",
-) -> str:
+) -> Tuple[str, List[str], str]:
     """
-    Extracts the specific brand + exact model code/sub-series from a raw listing title
-    across Guitars, Pedals, Microphones, and Amplifiers.
+    Combines listing title, seller make/model attributes, and Photo OCR text to:
+      1. Enforce true sub-brand identity (e.g. 'Squier' overrides 'Fender', 'Maestro' overrides 'Gibson').
+      2. Disambiguate incomplete or non-existent seller model strings (e.g. 'Fender Squire 15-G' -> 'Squier Champ 15G'
+         confirmed via photo faceplate/rear-plate OCR).
+      3. Return (primary_model_query, candidate_reverb_queries, resolution_audit_note).
     """
-    if make_hint and model_hint and len(model_hint.strip()) >= 2:
-        combined = f"{make_hint.strip()} {model_hint.strip()}"
-        combined = re.sub(r"\([^)]*\)|#[A-Za-z0-9\-]+", " ", combined)
-        combined = " ".join(combined.split())
-        if 2 <= len(combined.split()) <= 6:
-            return combined
+    norm_title = _normalize_spelling_and_codes(title)
+    norm_make = _normalize_spelling_and_codes(make_hint)
+    norm_model = _normalize_spelling_and_codes(model_hint)
+    norm_ocr = _normalize_spelling_and_codes(ocr_text)
 
-    cleaned = re.sub(r"\b(sn|s/n|serial|item|model)\s*[:#]?\s*[a-z0-9\-]+\b", " ", title, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\([^)]*\)|\[[^\]]*\]|#[A-Za-z0-9\-]+", " ", cleaned)
-    cleaned = re.sub(r"\b(19[5-9]\d|20[0-2]\d)\b", " ", cleaned)
-    cleaned = re.sub(r"(?<![\w\-])(\d+)\s*[-]?\s*(?:w|watt|watts)\b", r" \1 ", cleaned, flags=re.IGNORECASE)
+    combined_header = f"{norm_title} {norm_make} {norm_model}".strip()
+    combined_all = f"{combined_header} {norm_ocr}".lower()
+    header_low = combined_header.lower()
+    ocr_low = norm_ocr.lower()
+
+    resolution_note = ""
+
+    # 1. Special Case: Squier 15G / 15-G Practice Amp Disambiguation (Photo OCR + Real Catalog)
+    if item_category == "Amplifiers & Heads" and "squier" in combined_all and re.search(r"\b15g?\b", combined_all):
+        # Check if Photo OCR or text indicates 'Champ 15G' vs 'Frontman 15G'
+        has_champ_clues = any(
+            k in combined_all
+            for k in ("champ", "changp", "gain 1", "gain 2", "gaini", "ganz", "made in korea", "type: pr", "cpri", "pr 185", "pr-408")
+        )
+        if has_champ_clues or "frontman" not in combined_all:
+            primary = "Squier Champ 15G"
+            candidates = ["Squier Champ 15G", "Squier Champ 15", "Fender Frontman 15G"]
+            if "champ" not in header_low:
+                ocr_snippet = " ".join(norm_ocr.split()[:10]) if norm_ocr else "Faceplate/Grille Scan"
+                resolution_note = (
+                    f"[Photo-OCR Model Resolution] Seller listed make='{make_hint or 'Fender'}', model='{model_hint or 'Squier 15G'}' "
+                    f"(no 'Fender Squire 15-G' exists). Photo scan & OCR ('{ocr_snippet}') identified actual brand='Squier', model='Champ 15G'."
+                )
+            return (primary, candidates, resolution_note)
+        else:
+            primary = "Squier Frontman 15G"
+            candidates = ["Squier Frontman 15G", "Fender Frontman 15G", "Squier Champ 15G"]
+            return (primary, candidates, resolution_note)
+
+    # 2. Enforce Sub-Brand Override Rules (Never let parent company name override budget sub-brand)
+    override_brand = ""
+    parent_to_strip: Set[str] = set()
+    if "maestro" in combined_all or "first act" in combined_all or "baldwin" in combined_all:
+        override_brand = "Maestro"
+        parent_to_strip = {"gibson", "fender"}
+    elif "squier" in combined_all:
+        override_brand = "Squier"
+        parent_to_strip = {"fender"}
+    elif "starcaster" in combined_all:
+        override_brand = "Starcaster"
+        parent_to_strip = {"fender"}
+    elif "epiphone" in combined_all:
+        override_brand = "Epiphone"
+        parent_to_strip = {"gibson"}
+    elif "sigma" in combined_all:
+        override_brand = "Sigma"
+        parent_to_strip = {"martin"}
+
+    if override_brand and norm_make.lower() in parent_to_strip:
+        resolution_note = (
+            f"[Sub-Brand Correction] Seller listed manufacturer='{make_hint}', but item is budget sub-brand "
+            f"'{override_brand}' — stripped '{make_hint}' to prevent parent-brand price inflation."
+        )
+
+    # 3. Build merged token stream from (override_brand or make_hint) + model_hint + title
+    # Notice we merge model_hint AND title so incomplete model_hints (like Model='Professional' on 'American Fender Professional Stratocaster')
+    # never lose 'American' or 'Stratocaster' from the title!
+    source_stream = f"{override_brand} {norm_make} {norm_model} {norm_title}" if override_brand else f"{norm_make} {norm_model} {norm_title}"
 
     allowed_numbers = {
         "335", "339", "175", "100", "18", "28", "15", "24", "550", "450", "350", "50", "60",
         "57", "58", "7", "20", "421", "414", "214", "102", "103", "2020", "4040", "87",
         "9", "808", "2", "3", "5", "6", "1", "30", "40", "65", "800", "900",
-        "10", "12", "25", "35", "45", "75", "85", "120",
+        "10", "12", "25", "35", "45", "75", "85", "120", "2466", "2266", "4",
     }
 
-    tokens = re.findall(r"[A-Za-z0-9'\-]+", cleaned)
+    tokens = re.findall(r"[A-Za-z0-9'\-]+", source_stream)
     kept: List[str] = []
     for tok in tokens:
         low = tok.lower().strip("-'")
         if not low:
+            continue
+        if low in parent_to_strip:
             continue
         if len(low) == 1 and not low.isdigit():
             continue
@@ -650,21 +771,68 @@ def extract_specific_model_query(
             continue
         if low.isdigit() and low not in allowed_numbers:
             continue
-        if low in [k.lower() for k in kept] or (low.isdigit() and any(low in k.lower() for k in kept)):
+        if low in [k.lower() for k in kept] or (low.isdigit() and any(low == re.sub(r"\D", "", k.lower()) for k in kept)):
             continue
         kept.append(tok)
         if len(kept) >= 5:
             break
 
-    result = " ".join(kept) if len(kept) >= 2 else title[:45].strip()
-    res_low = result.lower()
+    # If Photo OCR found a specific 'MODEL <X>' token not yet in kept, append it as a fallback candidate
+    ocr_model_match = re.search(r"\bmodel\s+([a-z0-9\-]{2,10})\b", ocr_low)
+    ocr_extra_token = ocr_model_match.group(1).upper() if ocr_model_match else ""
+
+    primary = " ".join(kept) if len(kept) >= 2 else norm_title[:45].strip()
+    p_low = primary.lower()
 
     if item_category == "Guitars":
-        if "les paul" in res_low and not any(b in res_low for b in ("gibson", "epiphone", "chibson", "replica", "maestro")):
-            result = f"Gibson {result}"
-        elif ("stratocaster" in res_low or "telecaster" in res_low) and not any(b in res_low for b in ("fender", "squier", "squire", "starcaster")):
-            result = f"Fender {result}"
-    return result
+        if "les paul" in p_low and not any(b in p_low for b in ("gibson", "epiphone", "chibson", "replica", "maestro")):
+            primary = f"Gibson {primary}"
+        elif ("stratocaster" in p_low or "telecaster" in p_low) and not any(b in p_low for b in ("fender", "squier", "starcaster")):
+            primary = f"Fender {primary}"
+
+    candidates: List[str] = [primary]
+    # If norm_make + norm_model is a clean 2-4 word string distinct from primary, add it as a candidate
+    if norm_make and norm_model and norm_make.lower() not in parent_to_strip:
+        mm_tokens = [
+            t for t in f"{norm_make} {norm_model}".split()
+            if t.lower() not in parent_to_strip and t.lower() not in NOISE_WORDS
+        ]
+        if 2 <= len(mm_tokens) <= 4:
+            mm_q = " ".join(mm_tokens)
+            if mm_q.lower() not in [c.lower() for c in candidates]:
+                candidates.append(mm_q)
+
+    # Add a tighter 3-word core brand+model fallback if primary has 4-5 words
+    p_words = primary.split()
+    if len(p_words) >= 4:
+        short_q = " ".join(p_words[:3])
+        if short_q.lower() not in [c.lower() for c in candidates]:
+            candidates.append(short_q)
+
+    if ocr_extra_token and ocr_extra_token.lower() not in primary.lower():
+        brand_prefix = override_brand or (norm_make if norm_make else p_words[0] if p_words else "")
+        ocr_q = f"{brand_prefix} {ocr_extra_token}".strip()
+        if ocr_q and ocr_q.lower() not in [c.lower() for c in candidates]:
+            candidates.append(ocr_q)
+
+    return (primary, candidates[:3], resolution_note)
+
+
+def extract_specific_model_query(
+    title: str,
+    make_hint: str = "",
+    model_hint: str = "",
+    item_category: str = "Guitars",
+    ocr_text: str = "",
+) -> str:
+    primary, _, _ = resolve_model_and_candidate_queries(
+        title=title,
+        make_hint=make_hint,
+        model_hint=model_hint,
+        ocr_text=ocr_text,
+        item_category=item_category,
+    )
+    return primary
 
 
 def _has_specific_model_token(specific_model_query: str) -> bool:
@@ -695,49 +863,73 @@ def lookup_live_reverb_comp_for_model(
     target_condition: str = "Used",
     exclude_listing_id: str = "",
     item_category: str = "Guitars",
+    candidate_queries: Optional[List[str]] = None,
 ) -> Tuple[float, str, int, int]:
     """
-    Queries Reverb's live listings for the exact extracted model signature and calculates
-    the actual median resale comp based on genuine used condition (strictly excluding Brand New).
+    Queries Reverb's live listings across candidate model queries (cascading to fallback/photo-OCR
+    queries if the first query returns < 2 matches) and calculates the median resale comp based
+    on genuine used condition (strictly excluding Brand New, starter packs, and parts).
     Returns: (condition_resale_comp, condition_matched_label, comp_count, excluded_count)
     """
     ref_text = f"{source_title} {specific_model_query}".strip()
-    _, heuristic_val = _heuristic_tier_comp(ref_text, item_category=item_category)
+    tier_label, heuristic_val = _heuristic_tier_comp(ref_text, item_category=item_category)
+    is_generic_heuristic = (
+        tier_label.startswith("Used ")
+        or tier_label.endswith("Guitar Amplifier")
+        or tier_label.endswith("Effects Pedal")
+        or tier_label.endswith("Microphone")
+    )
+    max_heuristic_mult = 2.85 if is_generic_heuristic else 1.65
 
-    if not _has_specific_model_token(specific_model_query):
+    queries_to_try = list(candidate_queries) if candidate_queries else [specific_model_query]
+    if specific_model_query and specific_model_query not in queries_to_try:
+        queries_to_try.insert(0, specific_model_query)
+
+    valid_queries = [q for q in queries_to_try if _has_specific_model_token(q)]
+    if not valid_queries:
         return (heuristic_val, "Category / Sub-Model Baseline", 0, 0)
 
     source_is_custom_or_vintage = _is_custom_shop_or_vintage_title(ref_text)
     target_tier = normalize_condition_tier(target_condition)
-    cache_key = f"{item_category}::{specific_model_query.lower().strip()}::cs={int(source_is_custom_or_vintage)}::cond={target_tier}"
+    cache_key = (
+        f"{item_category}::{'|'.join(q.lower().strip() for q in valid_queries)}"
+        f"::cs={int(source_is_custom_or_vintage)}::cond={target_tier}"
+    )
     if cache_key in _COMP_CACHE:
         return _COMP_CACHE[cache_key]
 
     headers = {
         "Accept-Version": "3.0",
         "Accept": "application/hal+json",
-        "User-Agent": "GuitarEtl-ExactCompEngine/2.3",
+        "User-Agent": "GuitarEtl-ExactCompEngine/2.6",
     }
-    encoded = urllib.parse.quote(specific_model_query)
-    url = f"https://api.reverb.com/api/listings/all?query={encoded}&condition=used&per_page=35"
 
-    min_comp_price = CATEGORY_CATALOG.get(item_category, CATEGORY_CATALOG["Guitars"])["min_price_usd"]
+    # Allow legitimate $20-$49 used comps for budget/practice amps, pedals, and mics
+    min_comp_price = 45.0 if item_category == "Guitars" else 18.0
     polluted_excluded = 0
+    matched_prices_with_tier: List[Tuple[str, float]] = []
+    seen_reverb_ids: Set[str] = set()
+    ref_low = ref_text.lower()
 
-    try:
-        r = requests.get(url, headers=headers, timeout=6)
-        if r.status_code == 200:
+    for q_candidate in valid_queries:
+        encoded = urllib.parse.quote(q_candidate)
+        url = f"https://api.reverb.com/api/listings/all?query={encoded}&condition=used&per_page=35"
+
+        try:
+            r = requests.get(url, headers=headers, timeout=6)
+            if r.status_code != 200:
+                continue
             listings = r.json().get("listings", [])
             query_tokens = [
                 t.lower()
-                for t in re.findall(r"[A-Za-z0-9]+", specific_model_query)
+                for t in re.findall(r"[A-Za-z0-9]+", q_candidate)
                 if len(t) >= 2 and t.lower() not in {"guitar", "pedal", "microphone", "amp", "used", "by", "the"}
             ]
-            ref_low = ref_text.lower()
-            matched_prices_with_tier: List[Tuple[str, float]] = []
 
             for item in listings:
                 item_id = str(item.get("id", ""))
+                if not item_id or item_id in seen_reverb_ids:
+                    continue
                 if exclude_listing_id and item_id == exclude_listing_id.replace("REV-", ""):
                     continue
                 if not _is_reverb_category_match(item, item_category=item_category):
@@ -764,12 +956,14 @@ def lookup_live_reverb_comp_for_model(
                 # 3. Prevent sub-brand cross-pollution
                 if ("squier" in ref_low or "squire" in ref_low) != ("squier" in title_low or "squire" in title_low):
                     continue
+                if ("maestro" in ref_low) != ("maestro" in title_low):
+                    continue
                 if ("epiphone" in ref_low) != ("epiphone" in title_low):
                     continue
                 if "prs" in ref_low and ((" se " in f" {ref_low} ") != (" se " in f" {title_low} ")):
                     continue
 
-                # 4. Require token overlap with extracted model signature
+                # 4. Require token overlap with candidate model signature
                 if query_tokens:
                     req_matches = min(2 if item_category != "Guitars" else 3, len(query_tokens))
                     matches = sum(1 for qt in query_tokens[:4] if qt in title_low)
@@ -781,45 +975,50 @@ def lookup_live_reverb_comp_for_model(
                     try:
                         p_val = float(p_str)
                         if p_val >= min_comp_price:
-                            if not source_is_custom_or_vintage and heuristic_val >= 50.0 and p_val > heuristic_val * 1.55:
+                            if not source_is_custom_or_vintage and heuristic_val >= 35.0 and p_val > heuristic_val * max_heuristic_mult:
                                 polluted_excluded += 1
                                 continue
+                            seen_reverb_ids.add(item_id)
                             item_tier = normalize_condition_tier(cond_display or cond_slug)
                             matched_prices_with_tier.append((item_tier, p_val))
                     except ValueError:
                         pass
 
-            if matched_prices_with_tier:
-                tier_prices = [p for tier, p in matched_prices_with_tier if tier == target_tier]
-                condition_label = f"Matched {target_tier} Condition"
+            # If we already found >= 3 solid comps from the primary query, no need to query wider fallbacks
+            if len(matched_prices_with_tier) >= 3:
+                break
+        except Exception:
+            continue
 
-                if len(tier_prices) < 2:
-                    if target_tier in ("Mint", "Excellent"):
-                        tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Mint", "Excellent")]
-                        condition_label = "Mint / Excellent Condition"
-                    elif target_tier in ("Very Good", "Good"):
-                        tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Very Good", "Good")]
-                        condition_label = "Very Good / Good Condition"
-                    elif target_tier == "Fair":
-                        tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Fair", "Good")]
-                        condition_label = "Fair / Good Condition"
+    if matched_prices_with_tier:
+        tier_prices = [p for tier, p in matched_prices_with_tier if tier == target_tier]
+        condition_label = f"Matched {target_tier} Condition"
 
-                if len(tier_prices) < 2:
-                    tier_prices = [p for _, p in matched_prices_with_tier]
-                    condition_label = "Overall Used Market Median"
+        if len(tier_prices) < 2:
+            if target_tier in ("Mint", "Excellent"):
+                tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Mint", "Excellent")]
+                condition_label = "Mint / Excellent Condition"
+            elif target_tier in ("Very Good", "Good"):
+                tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Very Good", "Good")]
+                condition_label = "Very Good / Good Condition"
+            elif target_tier == "Fair":
+                tier_prices = [p for tier, p in matched_prices_with_tier if tier in ("Fair", "Good")]
+                condition_label = "Fair / Good Condition"
 
-                if len(tier_prices) >= 2:
-                    raw_med = statistics.median(tier_prices)
-                    core_prices = [p for p in tier_prices if 0.50 * raw_med <= p <= 1.55 * raw_med]
-                    if not core_prices:
-                        core_prices = tier_prices
-                    used_condition_comp = round(statistics.median(core_prices), 2)
+        if len(tier_prices) < 2:
+            tier_prices = [p for _, p in matched_prices_with_tier]
+            condition_label = "Overall Used Market Median"
 
-                    res = (used_condition_comp, condition_label, len(core_prices), polluted_excluded)
-                    _COMP_CACHE[cache_key] = res
-                    return res
-    except Exception:
-        pass
+        if len(tier_prices) >= 2:
+            raw_med = statistics.median(tier_prices)
+            core_prices = [p for p in tier_prices if 0.45 * raw_med <= p <= 1.60 * raw_med]
+            if not core_prices:
+                core_prices = tier_prices
+            used_condition_comp = round(statistics.median(core_prices), 2)
+
+            res = (used_condition_comp, condition_label, len(core_prices), polluted_excluded)
+            _COMP_CACHE[cache_key] = res
+            return res
 
     res = (heuristic_val, "Standard Used Baseline", 0, polluted_excluded)
     _COMP_CACHE[cache_key] = res
@@ -867,8 +1066,10 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
         if "boss" in lower:
             if "waza" in lower or "-2w" in lower or "-1w" in lower or "dm-2w" in lower or "bd-2w" in lower or "sd-1w" in lower:
                 return ("Boss Waza Craft Series Pedal", 130.00)
-            if any(k in lower for k in ("dd-500", "rv-500", "md-500", "rc-500", "gt-1000", "gx-100", "sy-300", "rc-600")):
+            if any(k in lower for k in ("dd-500", "rv-500", "md-500", "rc-500", "gt-1000", "gx-100", "sy-300", "rc-600", "rc-300")):
                 return ("Boss 500/1000 Workstation / Looper", 265.00)
+            if any(k in lower for k in ("me-80", "me-90", "me-70", "rc-30", "gt-100", "gt-1", "ve-20", "ve-500")):
+                return ("Boss Multi-Effects / Dual Loop Station", 165.00)
             if any(k in lower for k in ("dd-200", "rv-200", "ir-200", "eq-200", "od-200", "rc-5", "rv-6", "dd-8", "dd-7", "re-2")):
                 return ("Boss Compact Digital Delay/Reverb/Looper", 120.00)
             if any(k in lower for k in ("ds-1", "sd-1", "cs-3", "tu-2", "tu-3", "ch-1", "mt-2")):
@@ -881,7 +1082,7 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
                 return ("Ibanez TS9 Tube Screamer", 85.00)
             return ("Ibanez Effects Pedal", 75.00)
         if "electro-harmonix" in lower or "ehx" in lower or "big muff" in lower:
-            if "p9" in lower or "pog" in lower or "9 series" in lower or "mel9" in lower or "synth9" in lower or "B9" in lower:
+            if "p9" in lower or "pog" in lower or "9 series" in lower or "mel9" in lower or "synth9" in lower or "b9" in lower:
                 return ("EHX POG / 9-Series Polyphonic Pedal", 165.00)
             return ("Electro-Harmonix (EHX) Effects Pedal", 78.00)
         if "mxr" in lower or "dunlop" in lower or "cry baby" in lower or "crybaby" in lower or "proco" in lower or "rat " in lower:
@@ -952,6 +1153,11 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
     # CATEGORY 4: AMPLIFIERS & HEADS
     # ==========================================================================
     if item_category == "Amplifiers & Heads":
+        # Check Squier & small 10W-15W practice amps BEFORE Fender so 'Fender Squier 15G' never matches $325 Fender Amp
+        if "squier" in lower or "squire" in lower or any(
+            k in lower for k in ("champ 15", "15g", "15-g", "10g", "10-g", "sp-10", "sp10", "sidekick", "frontman 10", "frontman 15")
+        ):
+            return ("Squier / Fender 10W-15W Practice Amp (Champ 15G / Frontman)", 55.00)
         if "mesa" in lower or "boogie" in lower:
             return ("Mesa Boogie Tube Amplifier (USA)", 1150.00)
         if "fender" in lower:
@@ -961,18 +1167,26 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
                 return ("Fender Blues Jr / Hot Rod Tube Combo", 465.00)
             if any(k in lower for k in ("tone master", "tonemaster")):
                 return ("Fender Tone Master Series Amp", 675.00)
-            if any(k in lower for k in ("mustang", "champion", "frontman", "rumble")):
+            if any(k in lower for k in ("acoustasonic 15", "champion 20", "mustang i", "mustang lt25", "frontman 20", "frontman 25", "rumble 15", "rumble 25")):
+                return ("Fender Compact Practice / Acoustic Combo", 85.00)
+            if any(k in lower for k in ("gtx50", "gtx100", "gt100", "gt200", "champion 100", "mustang iv", "mustang v", "rumble 100", "rumble 200", "rumble 500")):
+                return ("Fender Mustang GTX / Stage Modeling Combo", 235.00)
+            if any(k in lower for k in ("mustang", "champion", "frontman", "rumble", "acoustasonic")):
                 return ("Fender Solid-State / Modeling Combo", 135.00)
             return ("Fender Guitar Amplifier", 325.00)
         if "marshall" in lower:
-            if any(k in lower for k in ("jcm800", "jcm 800", "jcm900", "jcm 900", "jvm", "plex", "1959", "silver jubilee")):
-                return ("Marshall UK Tube Head / Combo", 1150.00)
+            if any(k in lower for k in ("ms-2", "ms2", "ms-4", "ms4", "micro stack", "micro amp")):
+                return ("Marshall MS-2 / MS-4 Micro Battery Amp", 38.00)
+            if any(k in lower for k in ("jcm800", "jcm 800", "jcm900", "jcm 900", "jvm", "plex", "1959", "silver jubilee", "vintage modern", "2466", "2266")):
+                return ("Marshall UK Tube Head / Combo", 1050.00)
             if any(k in lower for k in ("dsl40", "dsl20", "origin", "studio")):
                 return ("Marshall DSL / Origin Tube Series", 475.00)
-            if "mg" in lower or "code" in lower:
-                return ("Marshall MG / Code Practice Amp", 120.00)
+            if any(k in lower for k in ("mg10", "mg15", "mg30", "dfx", "cfx", "gfx", "code", "valvestate", "avt")) or _has_word(lower, "mg"):
+                return ("Marshall MG / DFX / Code Practice Amp", 110.00)
             return ("Marshall Guitar Amplifier", 395.00)
         if "vox" in lower:
+            if "pathfinder" in lower or "vx15" in lower or "da5" in lower or "amplug" in lower:
+                return ("Vox Pathfinder / Compact Practice Amp", 75.00)
             if "ac30" in lower or "ac15" in lower:
                 return ("Vox AC15 / AC30 Tube Combo", 545.00)
             return ("Vox Guitar Amplifier", 165.00)
@@ -995,10 +1209,14 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
                 return ("Orange Crush Series Amplifier", 125.00)
             return ("Orange Guitar Amplifier", 175.00)
         if "boss" in lower or "katana" in lower:
+            if "mini" in lower or "air" in lower:
+                return ("Boss Katana Mini Practice Amp", 75.00)
             if "100" in lower or "artist" in lower:
                 return ("Boss Katana 100 / Artist Amp", 295.00)
             return ("Boss Katana 50 / Modeling Amp", 185.00)
-        return ("Used Guitar Amplifier", 245.00)
+        if any(k in lower for k in ("crate", "gt15", "gx15", "rage 158", "backstage", "vypyr", "line 6 spider", "spider iv", "gorilla", "rogue", "stage c30")):
+            return ("Compact Solid-State Practice Amp", 65.00)
+        return ("Used Guitar Amplifier", 195.00)
 
     # ==========================================================================
     # CATEGORY 1: GUITARS (ELECTRIC & ACOUSTIC)
@@ -1009,6 +1227,9 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
         "kit build", "diy build", "unbranded", "akusa"
     )):
         return ("Partscaster / DIY Kit / Style Copy", 165.00)
+
+    if any(k in lower for k in ("maestro", "first act", "baldwin")):
+        return ("Maestro / Entry Department-Store Guitar", 95.00)
 
     if any(k in lower for k in ("lxk2", "lx1", "lxm", "little martin")):
         return ("Martin Little Martin Travel Series (LXK2 / LX1)", 350.00)
@@ -1045,8 +1266,8 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
             return ("Gretsch Streamliner / Roots Series", 345.00)
         if "electromatic" in lower or "g54" in lower or "g52" in lower or "g56" in lower:
             return ("Gretsch Electromatic Series", 565.00)
-        if "professional" in lower or "japan" in lower or "g61" in lower or "falcon" in lower or "setzer" in lower:
-            return ("Gretsch Professional MIJ Series", 1850.00)
+        if "professional" in lower or "japan" in lower or "g61" in lower or "falcon" in lower or "setzer" in lower or "broadkaster" in lower:
+            return ("Gretsch Professional / USA-MIJ Series", 1850.00)
         return ("Gretsch Electromatic / Hollowbody", 525.00)
 
     if "starcaster" in lower:
@@ -1061,21 +1282,27 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
         return ("Squier by Fender Electric", 150.00)
 
     if "epiphone" in lower:
-        if any(k in lower for k in ("special", "sl", "junior", "jr", "dr-100", "pro-1", "les paul 100", "lp-100", "lp100", "express")):
+        if any(k in lower for k in ("pr-150", "pr150", "dr-100", "dr100", "pr-100", "pr-4e", "pro-1", "aj-100", "aj-220", "ft-30")):
+            return ("Epiphone Entry Acoustic Series", 135.00)
+        if any(k in lower for k in ("les paul special", "sg special", "les paul junior", "les paul 100", "lp-100", "lp100", "les paul express")) or _has_word(lower, "sl") or _has_word(lower, "jr"):
             return ("Epiphone Entry / Special / LP-100 Series", 145.00)
         if "tribute" in lower or "studio" in lower:
             return ("Epiphone Studio / Tribute Series", 245.00)
-        if "1959" in lower or "inspired by gibson" in lower or "ibgc" in lower or "custom" in lower or "casino" in lower or "sheraton" in lower:
-            return ("Epiphone Inspired by Gibson / Custom / Archtop", 575.00)
-        return ("Epiphone Standard Series", 385.00)
+        if any(k in lower for k in ("1959", "inspired by gibson", "ibgc", "custom", "casino", "sheraton", "bonamassa", "brent hinds", "masterbilt", "aj-500")):
+            return ("Epiphone Inspired by Gibson / Custom / Masterbilt", 575.00)
+        return ("Epiphone Standard Series (Les Paul / SG Standard)", 395.00)
 
-    is_gibson_family = "gibson" in lower or (
-        ("les paul" in lower or "sg standard" in lower)
-        and not any(x in lower for x in ("epiphone", "chibson", "replica", "clone", "copy", "maestro"))
+    is_gibson_family = (
+        ("gibson" in lower or "les paul" in lower or "sg standard" in lower)
+        and not any(x in lower for x in ("epiphone", "chibson", "replica", "clone", "copy", "maestro", "baldwin", "first act"))
     )
     if is_gibson_family:
-        if "les paul custom" in lower:
-            return ("Gibson Les Paul Custom (USA)", 3350.00)
+        if "les paul custom" in lower or "les paul supreme" in lower:
+            return ("Gibson Les Paul Custom / Supreme (USA)", 3350.00)
+        if any(k in lower for k in ("es-175", "es175", "es-335", "es335", "es-339", "l-37", "archtop")):
+            return ("Gibson USA ES / Archtop Hollowbody", 2650.00)
+        if any(k in lower for k in ("flying v", "explorer", "firebird")):
+            return ("Gibson USA Designer Series (Flying V / Explorer)", 1950.00)
         if "les paul standard" in lower or "standard 50s" in lower or "standard 60s" in lower:
             return ("Gibson Les Paul Standard (USA)", 2150.00)
         if "traditional" in lower:
@@ -1086,19 +1313,23 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
             return ("Gibson Les Paul Junior / Special (USA)", 1250.00)
         if "studio" in lower or "tribute" in lower or "faded" in lower:
             return ("Gibson Les Paul Studio / Tribute (USA)", 995.00)
-        if "sg standard" in lower:
-            return ("Gibson SG Standard (USA)", 1395.00)
+        if "sg standard" in lower or "kiszka" in lower or _has_word(lower, "sg"):
+            return ("Gibson SG Standard / Artist (USA)", 1395.00)
         return ("Gibson USA Electric", 1450.00)
 
-    is_fender_family = "fender" in lower or (
-        ("stratocaster" in lower or "telecaster" in lower)
+    is_fender_family = (
+        ("fender" in lower or "stratocaster" in lower or "telecaster" in lower)
         and not any(x in lower for x in ("squier", "squire", "starcaster", "partscaster", "replica"))
     )
     if is_fender_family:
-        if "american professional" in lower or "american pro" in lower or "american standard" in lower or "american performer" in lower or "american ultra" in lower:
+        if any(k in lower for k in ("american professional", "american pro", "american standard", "american performer", "american ultra", "american vintage")) or (
+            "american" in lower and ("stratocaster" in lower or "telecaster" in lower or "professional" in lower)
+        ):
             return ("Fender American Pro / Standard (USA)", 1250.00)
-        if "japan" in lower or "mij" in lower or "cij" in lower:
+        if "japan" in lower or "mij" in lower or "cij" in lower or "aerodyne" in lower or "hm strat" in lower:
             return ("Fender MIJ / Japan Series", 950.00)
+        if "fmt hh" in lower or "deluxe" in lower or "vintera" in lower:
+            return ("Fender Deluxe / Special Edition / Vintera", 695.00)
         if "player" in lower or "mexico" in lower or "mim" in lower or "standard" in lower:
             return ("Fender Player / Standard (MIM)", 565.00)
         return ("Fender Standard Series", 495.00)
@@ -1343,6 +1574,40 @@ def _extract_visual_model_insights(
     return " • ".join(clues[:4])
 
 
+def _extract_ocr_from_pil_image(img: Image.Image, run_threshold_pass: bool = False) -> List[str]:
+    """
+    Runs Windows Media OCR (winocr) on a PIL Image to read faceplate logos,
+    control-panel markings, and rear serial/model plates.
+    When run_threshold_pass is True (first photo), also inspects a 2x upscaled top-45%
+    faceplate crop + 160 binary threshold to capture small control-panel text and
+    metallic/cursive faceplate logos (e.g. 'Champ' script + 'INPUT GAIN 1 GAIN 2 15G').
+    """
+    if _winocr is None:
+        return []
+    lines_out: List[str] = []
+
+    def _collect(ocr_res: Dict[str, Any]) -> None:
+        for line in ocr_res.get("lines", []):
+            raw_t = (line.get("text") or "").strip()
+            clean_t = re.sub(r"[^\x20-\x7E]", "", raw_t).strip()
+            if len(clean_t) >= 3 and clean_t not in lines_out:
+                lines_out.append(clean_t)
+
+    try:
+        if run_threshold_pass:
+            w, h = img.size
+            top_h = max(60, int(h * 0.45))
+            crop_2x = img.crop((0, 0, w, top_h)).resize((w * 2, top_h * 2), Image.Resampling.BICUBIC)
+            _collect(_winocr.recognize_pil_sync(crop_2x, "en"))
+            bw_arr = np.where(np.asarray(crop_2x.convert("L")) > 160, 255, 0).astype(np.uint8)
+            bw_rgb = Image.fromarray(bw_arr).convert("RGB")
+            _collect(_winocr.recognize_pil_sync(bw_rgb, "en"))
+        _collect(_winocr.recognize_pil_sync(img, "en"))
+    except Exception:
+        pass
+    return lines_out
+
+
 def analyze_listing_images(
     image_urls: List[str],
     raw_condition: str,
@@ -1354,11 +1619,13 @@ def analyze_listing_images(
     """
     Downloads and inspects the listing's actual photos using Pillow (PIL) + NumPy computer-vision
     metrics (sharpness, surface micro-scratch/blemish density, oxidation/grime anomaly, lighting,
-    and center-crop HSV/RGB finish detection) combined with text cues to:
+    center-crop HSV/RGB finish detection) AND Windows Media OCR (winocr) faceplate/label text
+    recognition to:
       1. Determine the true Visual Condition Tier ('Mint', 'Excellent', 'Very Good', 'Good', 'Fair')
          and Visual Condition Score (0-100), especially when the listing only says 'Used' or 'Thrift'.
       2. Compute a Condition Valuation Multiplier to adjust the Used Condition Comp and Offer Prices.
-      3. Extract additional visual model/finish/hardware insights from the photos.
+      3. Read faceplate/headstock/serial-plate text via OCR to identify the exact model when seller
+         attributes are misspelled or incomplete (e.g. 'Fender Squire 15-G' -> 'Squier Champ 15G').
     """
     first_url = image_urls[0] if image_urls else "no_image"
     cache_key = f"{first_url}::{raw_condition}::{title[:40]}"
@@ -1385,20 +1652,25 @@ def analyze_listing_images(
     lighting_score = 72.0
     oxidation_penalty = 0.0
     detected_finish = "Standard Factory Finish"
+    ocr_lines: List[str] = []
 
-    # Download & analyze up to the first 2 listing photos
-    urls_to_scan = [u for u in image_urls[:2] if u and u.startswith("http")]
+    # Download & analyze up to the first 3 listing photos (so rear serial/model plates in photo 2/3 are scanned)
+    urls_to_scan = [u for u in image_urls[:3] if u and u.startswith("http")]
     cleanliness_samples: List[float] = []
     sharpness_samples: List[float] = []
     lighting_samples: List[float] = []
 
     for idx, img_url in enumerate(urls_to_scan):
         try:
+            # Upgrade Craigslist 600x450 URLs to 1200x900 during scan so faceplate & rear serial-plate text is crisp for OCR
+            scan_url = img_url.replace("_600x450.jpg", "_1200x900.jpg") if "images.craigslist.org" in img_url else img_url
             resp = requests.get(
-                img_url,
+                scan_url,
                 headers={"User-Agent": "Mozilla/5.0"},
                 timeout=3.5,
             )
+            if (resp.status_code != 200 or not resp.content) and scan_url != img_url:
+                resp = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3.5)
             if resp.status_code != 200 or not resp.content:
                 continue
 
@@ -1406,6 +1678,12 @@ def analyze_listing_images(
             w, h = img.size
             if idx == 0:
                 img_dims = f"{w}x{h}px"
+
+            # Run OCR on the full-resolution image (plus binary threshold pass on photo 1 for cursive/metallic faceplate logos)
+            extracted_lines = _extract_ocr_from_pil_image(img, run_threshold_pass=(idx == 0))
+            for el in extracted_lines:
+                if el not in ocr_lines:
+                    ocr_lines.append(el)
 
             # Resize to 240x240 for fast, deterministic numpy pixel analysis
             img_small = img.resize((240, 240), Image.Resampling.BILINEAR)
@@ -1541,9 +1819,10 @@ def analyze_listing_images(
     if oxidation_penalty >= 2.0:
         wear_desc += "; minor hardware tarnish/dust detected"
 
+    ocr_text_joined = " | ".join(ocr_lines)
     model_insights = _extract_visual_model_insights(
         title=title,
-        description=description,
+        description=f"{description} {ocr_text_joined}",
         detected_finish=detected_finish,
         photo_count=len(image_urls),
         img_dims=img_dims,
@@ -1562,6 +1841,7 @@ def analyze_listing_images(
         "visual_model_insights": model_insights,
         "is_vague_condition": is_vague_condition,
         "img_dims": img_dims,
+        "ocr_text": ocr_text_joined,
     }
     _IMAGE_SCAN_CACHE[cache_key] = result
     return result
@@ -1592,19 +1872,28 @@ def investigate_and_score_listing(
     audit_notes: List[str] = []
     cat_cfg = CATEGORY_CATALOG.get(item_category, CATEGORY_CATALOG["Guitars"])
 
-    specific_model_query = extract_specific_model_query(
-        title, make_hint, model_hint, item_category=item_category
-    )
-
-    # 1. Run Automated Computer-Vision Image Scan on listing photos
+    # 1. Run Automated Computer-Vision + Photo OCR Scan on listing photos FIRST
+    #    so faceplate/headstock/serial-plate text can resolve mislabeled seller models
+    prelim_query = extract_specific_model_query(title, make_hint, model_hint, item_category=item_category)
     img_scan = analyze_listing_images(
         image_urls=image_urls,
         raw_condition=condition,
         title=title,
         description=description,
         item_category=item_category,
-        specific_model_query=specific_model_query,
+        specific_model_query=prelim_query,
     )
+    ocr_text = img_scan.get("ocr_text", "")
+
+    # 2. Resolve exact model signature & fallback candidates using Title + Make/Model + Photo OCR
+    specific_model_query, candidate_queries, resolution_note = resolve_model_and_candidate_queries(
+        title=title,
+        make_hint=make_hint,
+        model_hint=model_hint,
+        ocr_text=ocr_text,
+        item_category=item_category,
+    )
+
     visual_tier = img_scan["visual_condition_tier"]
     visual_score = img_scan["visual_condition_score"]
     comp_multiplier = img_scan["comp_multiplier"]
@@ -1614,26 +1903,33 @@ def investigate_and_score_listing(
     visual_model_insights = img_scan["visual_model_insights"]
     images_scanned_count = img_scan["images_scanned_count"]
 
+    if resolution_note:
+        visual_model_insights = f"Model ID: {specific_model_query} ({resolution_note}) • {visual_model_insights}"
+
     if img_scan["is_vague_condition"]:
         effective_condition_display = f"{visual_tier} (Image-Scanned {visual_score}/100 • Stated: {condition})"
     else:
         effective_condition_display = f"{visual_tier} (Image-Verified {visual_score}/100 • Stated: {condition})"
 
     audit_notes.append(
-        f"[Image Condition Scan] Scanned {images_scanned_count} listing photo(s) ({img_scan['img_dims']}): "
+        f"[Image Condition & OCR Scan] Scanned {images_scanned_count} listing photo(s) ({img_scan['img_dims']}): "
         f"Visual Condition = {visual_tier} ({visual_score}/100) | {visual_wear_summary} | {visual_model_insights}."
     )
+    if resolution_note:
+        audit_notes.append(f"[Photo & Sub-Brand Model Resolver] {resolution_note} -> Resolved Model: '{specific_model_query}'.")
 
-    # 2. Look up Used Condition Comps using the Image-Scanned Condition Tier
+    # 3. Look up Used Condition Comps using Title + Make/Model + Resolved Model (excluding description trade-wish text!)
+    clean_model_context = f"{title} {make_hint} {model_hint} {specific_model_query}".strip()
     tier_label, heuristic_comp = _heuristic_tier_comp(
-        f"{title} {description}", item_category=item_category
+        clean_model_context, item_category=item_category
     )
     used_comp, condition_label, comp_count, polluted_excluded = lookup_live_reverb_comp_for_model(
         specific_model_query,
-        source_title=f"{title} {description}",
+        source_title=clean_model_context,
         target_condition=visual_tier,
         exclude_listing_id=listing_id,
         item_category=item_category,
+        candidate_queries=candidate_queries,
     )
 
     if polluted_excluded > 0:
@@ -1656,9 +1952,7 @@ def investigate_and_score_listing(
             f"[Sub-Model Tier Match] Classified as '{tier_label}' (Standard Used Baseline: ${base_comp:,.2f})."
         )
 
-    # 3. Apply Visual Condition Valuation Multiplier from Image Scan
-    # If Reverb already matched the exact Mint/Excellent/Good tier with >=2 comps, apply 50% of the fine score delta;
-    # if it used Overall Used Median or Sub-Model Baseline, apply the full image-scanned condition multiplier.
+    # 4. Apply Visual Condition Valuation Multiplier from Image Scan
     if comp_count >= 2 and condition_label.startswith("Matched "):
         effective_mult = round(1.0 + (comp_multiplier - 1.0) * 0.55, 4)
     else:
@@ -1736,6 +2030,10 @@ def investigate_and_score_listing(
     meta = dict(extra_metadata or {})
     meta["Category"] = item_category
     meta["Extracted Model Signature"] = specific_model_query
+    if resolution_note:
+        meta["Model Resolution & Photo OCR"] = resolution_note
+    if ocr_text:
+        meta["Photo OCR Text Detected"] = ocr_text[:140]
     meta["Image-Scanned Condition"] = f"{visual_tier} ({visual_score}/100)"
     meta["Detected Visual Finish"] = detected_finish
     meta["Visual Model & Hardware Clues"] = visual_model_insights
@@ -2168,11 +2466,14 @@ def fetch_live_craigslist_listings(
         locations = decode.get("locations", [])
         items = data.get("items", [])
 
-        q_tokens = [
-            t.lower()
-            for t in re.findall(r"[A-Za-z0-9]+", query)
-            if len(t) >= 3 and t.lower() not in {"guitar", "guitars", "electric", "acoustic"}
-        ]
+        generic_cat_words = {
+            "guitar", "guitars", "electric", "acoustic", "amplifier", "amplifiers", "amp", "amps",
+            "pedal", "pedals", "effects", "effect", "microphone", "microphones", "mic", "mics",
+            "combo", "head", "tube", "studio", "audio", "condenser", "dynamic",
+        }
+        raw_q_tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9]+", query) if len(t) >= 3]
+        specific_q_tokens = [t for t in raw_q_tokens if t not in generic_cat_words]
+        q_tokens = specific_q_tokens if specific_q_tokens else raw_q_tokens
         results: List[LiveGuitarListing] = []
         for raw_item in items:
             if not isinstance(raw_item, list) or len(raw_item) < 6:
