@@ -323,6 +323,7 @@ NOISE_WORDS = {
     "ed", "edition", "series", "collection", "the", "by", "in", "for", "sale",
     "and", "or", "includes", "included", "free", "shipping", "fast", "local", "pickup",
     "cond", "mint", "trade", "survivor", "box", "power", "supply",
+    "weird", "cool", "crazy", "sweet", "awesome", "vintage", "old", "custom", "funky",
 }
 
 GENERIC_QUERY_WORDS = {
@@ -332,6 +333,7 @@ GENERIC_QUERY_WORDS = {
     "shure", "sennheiser", "neumann", "akg", "rode", "audix", "marshall", "vox", "orange", "peavey",
     "guitar", "guitars", "electric", "acoustic", "bass", "american", "made",
     "pedal", "pedals", "effects", "effect", "microphone", "mic", "amplifier", "amp", "audio",
+    "italian", "japanese", "german", "british", "korean", "mexican", "chinese",
 }
 
 REPLICA_KEYWORDS = (
@@ -1575,6 +1577,43 @@ def fetch_live_goodwill_listings(
 # 3. CRAIGSLIST LOCAL CLASSIFIEDS CONNECTOR
 # ==============================================================================
 
+def _fetch_craigslist_detail(post_url: str) -> Dict[str, Any]:
+    """
+    Fetches the individual Craigslist post page to extract structured attributes:
+      - make / manufacturer (e.g. 'Stage', 'Fender', 'Marshall')
+      - model name / number (e.g. 'C30', 'Blues Junior', 'Stratocaster')
+      - condition (e.g. 'Good', 'Excellent', 'Like New')
+      - full posting body description
+    """
+    if not post_url or "craigslist.org/view/d/" not in post_url:
+        return {}
+    try:
+        r = requests.get(post_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
+        if r.status_code != 200 or not r.text:
+            return {}
+        html_text = r.text
+
+        make_m = re.search(r'class="attr sale_manufacturer"[^>]*>.*?<span class="valu">([^<]+)</span>', html_text, re.DOTALL)
+        model_m = re.search(r'class="attr sale_model"[^>]*>.*?<span class="valu">([^<]+)</span>', html_text, re.DOTALL)
+        cond_m = re.search(r'class="attr condition"[^>]*>.*?<span class="valu">\s*(?:<a[^>]*>)?\s*([^<\n\r]+)', html_text, re.DOTALL)
+        body_m = re.search(r'<section id="postingbody">(.*?)</section>', html_text, re.DOTALL)
+
+        body_clean = ""
+        if body_m:
+            raw_body = re.sub(r'<div class="print-information.*?</div>', '', body_m.group(1), flags=re.DOTALL)
+            raw_body = re.sub(r'<[^>]+>', ' ', raw_body)
+            body_clean = html.unescape(' '.join(raw_body.split())).strip()
+
+        return {
+            "make": make_m.group(1).strip() if make_m else "",
+            "model": model_m.group(1).strip() if model_m else "",
+            "condition": cond_m.group(1).strip().title() if cond_m else "",
+            "description": body_clean,
+        }
+    except Exception:
+        return {}
+
+
 def fetch_live_craigslist_listings(
     query: str,
     max_items: int = 5,
@@ -1651,26 +1690,37 @@ def fetch_live_craigslist_listings(
                 else f"https://cincinnati.craigslist.org/search/msa?query={encoded_q}"
             )
 
+            detail = _fetch_craigslist_detail(post_url) if (post_url and "view/d/" in post_url) else {}
+            make_hint = detail.get("make", "")
+            model_hint = detail.get("model", "")
+            cl_cond = detail.get("condition") or "Used (Local Owner)"
+            cl_desc = detail.get("description") or (
+                f"Live Craigslist musical instruments listing in {loc_str}. "
+                f"Local cash pickup eliminates inbound shipping costs ($0.00 shipping)."
+            )
+
             scored = investigate_and_score_listing(
                 listing_id=f"CL-{raw_item[0]}",
                 platform="Craigslist (Local)",
                 title=title,
-                condition="Used (Local Owner)",
+                condition=cl_cond,
                 seller_name=f"Private Seller ({loc_str})",
                 location=loc_str,
                 ask_price_usd=float(price_val),
                 shipping_usd=0.00,
                 listing_url=post_url,
                 image_urls=photos,
-                description=(
-                    f"Live Craigslist musical instruments listing in {loc_str}. "
-                    f"Local cash pickup eliminates inbound shipping costs ($0.00 shipping)."
-                ),
+                description=cl_desc,
+                make_hint=make_hint,
+                model_hint=model_hint,
                 item_category=item_category,
                 extra_metadata={
                     "Region Hub": loc_str,
                     "Pickup Shipping": "$0.00 (Local Pickup)",
                     "Photos Attached": len(photos),
+                    **({"Make / Manufacturer": make_hint} if make_hint else {}),
+                    **({"Model Name / Number": model_hint} if model_hint else {}),
+                    **({"Condition": cl_cond} if cl_cond else {}),
                 },
             )
             if scored:
