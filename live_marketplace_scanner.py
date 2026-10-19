@@ -84,6 +84,13 @@ EXCLUDE_KEYWORDS = (
     "upright bass",
     "double bass",
     "lap steel",
+    "watch",
+    "chronograph",
+    "timepiece",
+    "jewelry",
+    "bracelet",
+    "apparel",
+    "t-shirt",
 )
 
 NOISE_WORDS = {
@@ -562,11 +569,25 @@ def _heuristic_tier_comp(title: str) -> Tuple[str, float]:
         return ("Fender Standard Series", 495.00)
 
     if "prs" in lower or "paul reed smith" in lower:
-        if "se " in lower or " se" in lower:
-            return ("PRS SE Series", 550.00)
-        if "s2" in lower or "ce 24" in lower:
-            return ("PRS S2 / CE Series (USA)", 1395.00)
-        return ("PRS Core Series (USA)", 2850.00)
+        # 1. Any PRS acoustic is an imported SE series model (Angelus, Tonare, Parlor P20, A20-A60, T40-T60).
+        # PRS does not make standard USA production acoustics (only $10k+ Private Stock).
+        if any(ak in lower for ak in ("acoustic", "angelus", "tonare", "parlor", "p20", "p50", "a20", "a40", "t40", "a50", "t50", "a60", "t60")):
+            return ("PRS SE Acoustic Series (Import)", 425.00)
+
+        # 2. Check for explicit SE (Student Edition - Import) or Cor-Tek / Indonesia / Korea
+        if any(sk in lower for sk in ("se ", " se", "se-", "se/", "student edition", "indonesia", "korea", "cor-tek", "cortek")):
+            return ("PRS SE Series (Import)", 525.00)
+
+        # 3. Check for S2 or CE Bolt-on series (USA Mid-Tier)
+        if "s2" in lower or "ce 24" in lower or "ce24" in lower or "bolt-on" in lower or "bolt on" in lower:
+            return ("PRS S2 / CE Series (USA)", 1295.00)
+
+        # 4. Core USA / Private Stock: Require explicit Core / USA / Maryland / McCarty / 10-Top markers
+        if any(uk in lower for uk in ("core", "usa", "made in usa", "maryland", "custom 24", "custom 22", "mccarty", "594", "10-top", "10 top", "private stock")):
+            return ("PRS Core Series (USA)", 2750.00)
+
+        # Safe realistic default for generic/unspecified PRS electrics (SE models represent 85%+ of secondhand listings)
+        return ("PRS SE Series (Import)", 525.00)
 
     if "ibanez" in lower:
         if "gio" in lower or "grg" in lower or "grx" in lower:
@@ -602,10 +623,10 @@ def investigate_and_score_listing(
     audit_notes: List[str] = []
 
     specific_model_query = extract_specific_model_query(title, make_hint, model_hint)
-    tier_label, heuristic_comp = _heuristic_tier_comp(title)
+    tier_label, heuristic_comp = _heuristic_tier_comp(f"{title} {description}")
     used_comp, condition_label, comp_count, polluted_excluded = lookup_live_reverb_comp_for_model(
         specific_model_query,
-        source_title=title,
+        source_title=f"{title} {description}",
         target_condition=condition,
         exclude_listing_id=listing_id,
     )
