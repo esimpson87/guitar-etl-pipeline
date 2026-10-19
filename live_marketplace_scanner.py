@@ -503,6 +503,28 @@ def _is_valid_item_title(title: str, item_category: str = "Guitars") -> bool:
     if item_category == "Guitars":
         if any(bad in lower for bad in GUITAR_ONLY_EXCLUDE_KEYWORDS):
             return False
+
+        # 1. Strictly exclude Bass Guitars (safely preserving 'basswood' tonewood)
+        clean_no_basswood = re.sub(r"\bbasswood\b", "tonewood", lower)
+        if re.search(r"\b(bass|basses|p-bass|j-bass|soundgear|bronco\s+bass|jazz\s+bass|precision\s+bass)\b", clean_no_basswood):
+            return False
+
+        # 2. Strictly exclude Amplifiers, Amp Heads, and Speaker Cabinets
+        if re.search(r"\b(amp|amps|amplifier|amplifiers|combo|cabinet|cabinets|cab|cabs|stack)\b", lower):
+            return False
+
+        # 3. Strictly exclude Speakers, Woofers, Subwoofers, Drivers
+        if re.search(r"\b(speaker|speakers|subwoofer|subwoofers|woofer|woofers|tweeter|tweeters|celestion|eminence|jensen)\b", lower):
+            return False
+
+        # 4. Strictly exclude Audio Interfaces, Headphones, Microphones, Mixers, Pedals
+        if re.search(r"\b(headphone|headphones|microphone|microphones|mic|mics|pedal|pedals|stompbox|mixer|interface|soundboard)\b", lower):
+            return False
+
+        # 5. Strictly exclude iconic amp models that omit the word 'amp'
+        if re.search(r"\b(katana|blues\s+(?:jr|junior|deluxe)|hot\s+rod\s+(?:deluxe|deville)|twin\s+reverb|deluxe\s+reverb|princeton\s+reverb|super\s+reverb|ac15|ac30|dsl40|dsl20|rockerverb|bandit\s+\d+|cube\s+\d+|mustang\s+(?:lt|gtx?|micro|i|ii|iii|iv|v))\b", lower):
+            return False
+
         if "case" in lower and not any(
             ok in lower for ok in ("with case", "w/ case", "w/case", "w case", "ohsc", "includes case", "with hard", "w/ hard", "with original")
         ):
@@ -511,14 +533,31 @@ def _is_valid_item_title(title: str, item_category: str = "Guitars") -> bool:
                 for ck in ("custom case", "les paul case", "strat case", "tele case", "acoustic case", "fitted case", "plush case", "canadian made")
             ) or lower.strip(" !.").endswith("case"):
                 return False
+
     elif item_category == "Guitar Pedals & Effects":
         if any(bad in lower for bad in PEDAL_EXCLUDE_KEYWORDS):
             return False
+        if re.search(r"\b(stratocaster|telecaster|les paul|precision bass|jazz bass)\b", lower) and not any(ok in lower for ok in ("pedal", "effects", "preamp", "simulator", "modeler", "multi")):
+            return False
+        if re.search(r"\b(amplifier|amplifiers|cabinet|cabinets|speaker|speakers|combo)\b", lower) and not any(ok in lower for ok in ("pedal", "preamp", "sim", "simulator", "cab sim", "ir", "amp in a box")):
+            return False
+
     elif item_category == "Microphones & Studio Audio":
         if any(bad in lower for bad in MIC_EXCLUDE_KEYWORDS):
             return False
+        clean_no_basswood = re.sub(r"\bbasswood\b", "tonewood", lower)
+        if re.search(r"\b(stratocaster|telecaster|les paul|bass|basses)\b", clean_no_basswood) and not any(ok in lower for ok in ("mic", "microphone", "capsule", "pickup")):
+            return False
+        if re.search(r"\b(amplifier|amp|amps|combo|cabinet|cab|pedal|pedals)\b", lower) and not any(ok in lower for ok in ("mic", "preamp", "interface")):
+            return False
+
     elif item_category == "Amplifiers & Heads":
         if any(bad in lower for bad in AMP_EXCLUDE_KEYWORDS):
+            return False
+        clean_no_basswood = re.sub(r"\bbasswood\b", "tonewood", lower)
+        if re.search(r"\b(stratocaster|telecaster|les paul)\b", lower) and not any(ok in lower for ok in ("amp", "amps", "amplifier", "combo", "cab", "head", "stack", "speaker")):
+            return False
+        if re.search(r"\b(p-bass|j-bass)\b", clean_no_basswood) and not any(ok in lower for ok in ("amp", "amps", "amplifier", "combo", "cab", "head", "stack", "speaker")):
             return False
 
     return True
@@ -534,19 +573,19 @@ def _is_reverb_category_match(item: Dict[str, Any], item_category: str = "Guitar
         return True
 
     if item_category == "Guitars":
-        if any(bad_cat in full_names for bad_cat in ("accessories", "cases", "gig bags", "parts", "pickups", "amps", "amplifiers", "pedals", "merchandise")):
+        if any(bad_cat in full_names for bad_cat in ("bass", "basses", "accessories", "cases", "gig bags", "parts", "pickups", "amps", "amplifiers", "cabinets", "speakers", "pedals", "effects", "merchandise", "pro audio", "microphones", "drums")):
             return False
         return "guitar" in full_names
     elif item_category == "Guitar Pedals & Effects":
-        if any(bad_cat in full_names for bad_cat in ("cables", "power supplies", "cases", "merchandise", "parts")):
+        if any(bad_cat in full_names for bad_cat in ("cables", "power supplies", "cases", "merchandise", "parts", "guitars", "bass guitars", "acoustic guitars")):
             return False
         return any(ok in full_names for ok in ("pedal", "effects", "multi-effect", "preamp", "looper", "wah", "overdrive", "distortion", "delay", "reverb", "fuzz"))
     elif item_category == "Microphones & Studio Audio":
-        if any(bad_cat in full_names for bad_cat in ("stands", "cables", "cases", "parts", "windscreens", "mounts")):
+        if any(bad_cat in full_names for bad_cat in ("stands", "cables", "cases", "parts", "windscreens", "mounts", "guitars", "bass guitars", "amplifiers")):
             return False
         return any(ok in full_names for ok in ("microphone", "pro audio", "vocal", "condenser", "dynamic", "ribbon", "preamp", "interface"))
     elif item_category == "Amplifiers & Heads":
-        if any(bad_cat in full_names for bad_cat in ("covers", "cases", "parts", "tubes", "footswitch", "cables", "attenuator")):
+        if any(bad_cat in full_names for bad_cat in ("covers", "cases", "parts", "tubes", "footswitch", "cables", "attenuator", "guitars", "electric guitars", "acoustic guitars", "pedals")):
             return False
         return any(ok in full_names for ok in ("amp", "combos", "heads", "cabinets"))
 
