@@ -91,6 +91,16 @@ EXCLUDE_KEYWORDS = (
     "bracelet",
     "apparel",
     "t-shirt",
+    "unfinished",
+    "diy kit",
+    "guitar kit",
+    "body neck",
+    "body and neck",
+    "body & neck",
+    "guitar body",
+    "guitar neck",
+    "project body",
+    "raw body",
 )
 
 NOISE_WORDS = {
@@ -134,6 +144,19 @@ REPLICA_KEYWORDS = (
     "not a gibson",
     "unbranded",
     "homage",
+    "prs style",
+    "strat style",
+    "tele style",
+    "les paul style",
+    "lp style",
+    "style guitar",
+    "style body",
+    "style neck",
+    "style electric",
+    "style build",
+    "diy build",
+    "kit build",
+    "akusa",
 )
 
 REPAIR_RISK_KEYWORDS = (
@@ -496,6 +519,15 @@ def lookup_live_reverb_comp_for_model(
 def _heuristic_tier_comp(title: str) -> Tuple[str, float]:
     lower = title.lower()
     compact = re.sub(r"[\-\s]+", "", lower)
+
+    # 0. Intercept style replicas, DIY kit builds, and unbranded copies BEFORE brand matching
+    # (e.g. 'Akusa PRS Style', 'Strat Style Kit', 'LP Style Copy')
+    if any(rk in lower for rk in (
+        "prs style", "strat style", "tele style", "les paul style", "lp style",
+        "style guitar", "copy guitar", "partscaster", "chibson", "tribute build", "replica",
+        "kit build", "diy build", "unbranded", "akusa"
+    )):
+        return ("Partscaster / DIY Kit / Style Copy", 165.00)
 
     if any(k in lower for k in ("lxk2", "lx1", "lxm", "little martin")):
         return ("Martin Little Martin Travel Series (LXK2 / LX1)", 350.00)
