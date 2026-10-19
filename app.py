@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-guitar-etl-pipeline v2.1 — Live Multi-Platform Guitar Arbitrage & Agentic BI Workbench
+guitar-etl-pipeline v2.2 — Live Multi-Category Music Gear Arbitrage & Agentic BI Workbench
 Author: Eric Simpson | Site Reliability & AI/Data Platform Engineer
 
 Features:
-  1. Live Multi-Platform Arbitrage Scanner (Reverb API, ShopGoodwill Thrift Auctions, Craigslist Local Classifieds,
-     plus 1-click deep search launchers for Facebook Marketplace, eBay Auctions/BIN, HiBid Estate Sales & GC Used).
-  2. Mobile-Friendly, Full-Width Horizontal Arbitrage Chart: Thick, spacious horizontal bars with large outside
-     dollar labels—click any bar or use the mobile-friendly Prev/Next buttons to inspect that guitar's photo gallery,
-     exact sub-model valuation audit, seller description, and direct purchase/bid link.
-  3. "Glass-Box" Semantic Kernel Agent Copilot with expandable tool-execution traces and OpenTelemetry spans.
+  1. Multi-Category & Brand Filtering: Filter by Item Type (Guitars, Guitar Pedals & Effects,
+     Microphones & Studio Audio, Amplifiers & Heads) and Brand (Gibson, Gretsch, Epiphone, Fender, Boss, Shure, etc.).
+  2. Recommended Offer Price & Suggested Maximum Offer / Max Auction Bid Ceiling on every listing
+     (shows exact offer needed to make even overpriced listings profitable).
+  3. Left / Right Arrow Buttons (⬅️ Prev Photo / Next Photo ➡️) for browsing listing photos instead of a slider.
+  4. Full-Width, Mobile-Friendly Horizontal Arbitrage Bar Chart with outside dollar callouts.
+  5. "Glass-Box" Semantic Kernel Agent Copilot with expandable tool-execution traces and OpenTelemetry spans.
 """
 
 from __future__ import annotations
@@ -26,6 +27,9 @@ from guitar_etl_agentic_workflow import (
     run_agentic_pipeline,
 )
 from live_marketplace_scanner import (
+    CATEGORY_CATALOG,
+    build_category_brand_query,
+    infer_category_from_query,
     scan_all_live_platforms,
 )
 
@@ -34,7 +38,7 @@ from live_marketplace_scanner import (
 # ==============================================================================
 
 st.set_page_config(
-    page_title="Guitar ETL v2.1 | Live Multi-Platform Arbitrage & Agentic Workbench",
+    page_title="Music Gear Arbitrage & Agentic Workbench v2.2",
     page_icon="🎸",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -46,7 +50,7 @@ st.markdown(
     .block-container {
         padding-top: 1.0rem;
         padding-bottom: 2.5rem;
-        max-width: 1400px;
+        max-width: 1420px;
     }
     .trace-pill {
         display: inline-block;
@@ -109,7 +113,22 @@ st.markdown(
         margin-top: 10px;
         margin-bottom: 18px;
     }
-    /* Mobile responsiveness for phones & tablets */
+    .offer-strategy-box {
+        background: rgba(16, 185, 129, 0.09);
+        border: 1.5px solid rgba(16, 185, 129, 0.42);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-top: 8px;
+        margin-bottom: 12px;
+    }
+    .photo-counter-pill {
+        text-align: center;
+        font-weight: 700;
+        font-size: 0.92rem;
+        padding: 6px 10px;
+        border-radius: 8px;
+        background: rgba(148, 163, 184, 0.14);
+    }
     @media (max-width: 768px) {
         .block-container {
             padding-left: 0.6rem !important;
@@ -120,7 +139,7 @@ st.markdown(
             padding: 12px 12px;
         }
         div[data-testid="stMetricValue"] {
-            font-size: 1.35rem !important;
+            font-size: 1.3rem !important;
         }
     }
     </style>
@@ -141,6 +160,7 @@ def get_cached_pipeline_report() -> Dict[str, Any]:
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cached_live_scan(
     query: str,
+    item_category: str,
     include_reverb: bool,
     include_goodwill: bool,
     include_craigslist: bool,
@@ -152,9 +172,11 @@ def get_cached_live_scan(
         include_goodwill=include_goodwill,
         include_craigslist=include_craigslist,
         max_per_platform=max_per_platform,
+        item_category=item_category,
     )
     return {
         "query": res["query"],
+        "item_category": res.get("item_category", item_category),
         "live_median_comp_usd": res["live_median_comp_usd"],
         "total_live_listings": res["total_live_listings"],
         "duplicates_removed": res.get("duplicates_removed", 0),
@@ -170,8 +192,21 @@ def get_cached_live_scan(
 if "pipeline_report" not in st.session_state:
     st.session_state.pipeline_report = get_cached_pipeline_report()
 
+if "selected_category" not in st.session_state:
+    st.session_state.selected_category = "Guitars"
+
+if "selected_brand" not in st.session_state:
+    st.session_state.selected_brand = "Fender"
+
+if "custom_submodel_kw" not in st.session_state:
+    st.session_state.custom_submodel_kw = ""
+
 if "live_search_query" not in st.session_state:
-    st.session_state.live_search_query = "Fender Stratocaster"
+    st.session_state.live_search_query = build_category_brand_query(
+        st.session_state.selected_category,
+        st.session_state.selected_brand,
+        st.session_state.custom_submodel_kw,
+    )
 
 if "inc_reverb" not in st.session_state:
     st.session_state.inc_reverb = True
@@ -181,9 +216,10 @@ if "inc_craigslist" not in st.session_state:
     st.session_state.inc_craigslist = True
 
 if "live_scan_data" not in st.session_state:
-    with st.spinner("Scanning live marketplaces (Reverb, ShopGoodwill Thrift Auctions, Craigslist)..."):
+    with st.spinner(f"Scanning live marketplaces for '{st.session_state.live_search_query}'..."):
         st.session_state.live_scan_data = get_cached_live_scan(
             st.session_state.live_search_query,
+            st.session_state.selected_category,
             st.session_state.inc_reverb,
             st.session_state.inc_goodwill,
             st.session_state.inc_craigslist,
@@ -191,6 +227,9 @@ if "live_scan_data" not in st.session_state:
 
 if "selected_listing_idx" not in st.session_state:
     st.session_state.selected_listing_idx = 0
+
+if "photo_indices" not in st.session_state:
+    st.session_state.photo_indices = {}
 
 if "custom_sre_incidents" not in st.session_state:
     st.session_state.custom_sre_incidents = []
@@ -200,17 +239,17 @@ if "chat_messages" not in st.session_state:
         {
             "role": "assistant",
             "content": (
-                "Welcome to the **Live Multi-Platform Guitar Arbitrage & Agentic Workbench**!\n\n"
-                "- **Real-Time Multi-Platform Data:** Scans live listings across **Reverb**, "
-                "**ShopGoodwill Online Thrift Auctions**, and **Craigslist Local Classifieds**.\n"
-                "- **Click Any Bar or Use Prev/Next Buttons:** Select any guitar to inspect its **real photo gallery**, "
-                "exact sub-model Reverb comp audit, seller description, and direct purchase/bid link."
+                "Welcome to the **Multi-Category Music Gear Arbitrage & Offer Strategy Workbench**!\n\n"
+                "- **Filter by Item Type & Brand:** Scan **Guitars**, **Guitar Pedals & Effects**, **Microphones & Studio Audio**, "
+                "or **Amplifiers & Heads** by brand across **Reverb**, **ShopGoodwill**, and **Craigslist**.\n"
+                "- **Recommended Offer & Max Auction Bid:** Every item includes a **Recommended Offer (`25% Net ROI`)** and a "
+                "**Suggested Maximum Offer / Bid Ceiling (`12% ROI Floor`)** so you know the exact price that makes any item a profitable flip."
             ),
             "tool_trace": [
                 {
                     "tool": "LiveMarketplaceScanner.ScanAllPlatformsAsync",
-                    "input": f"query='{st.session_state.live_search_query}', platforms=['Reverb', 'ShopGoodwill', 'Craigslist']",
-                    "output": f"Fetched {len(st.session_state.live_scan_data['listings'])} verified listings with sub-model comps",
+                    "input": f"category='{st.session_state.selected_category}', query='{st.session_state.live_search_query}'",
+                    "output": f"Fetched {len(st.session_state.live_scan_data['listings'])} verified listings with offer & max-bid guidance",
                     "latency_ms": 312.4,
                 }
             ],
@@ -244,6 +283,11 @@ def get_active_listing() -> Dict[str, Any]:
             "net_roi_pct": 0.0,
             "signal": "PASS",
             "listing_url": "https://reverb.com",
+            "item_category": st.session_state.selected_category,
+            "recommended_offer_usd": 0.0,
+            "profit_at_recommended_offer_usd": 0.0,
+            "max_offer_usd": 0.0,
+            "break_even_offer_usd": 0.0,
             "image_urls": [],
             "description": "",
             "extra_metadata": {},
@@ -253,13 +297,22 @@ def get_active_listing() -> Dict[str, Any]:
     return listings[idx]
 
 
-def run_new_live_search(query: str) -> None:
-    st.session_state.live_search_query = query.strip()
+def execute_category_brand_scan(
+    item_category: str,
+    brand: str,
+    custom_kw: str = "",
+) -> None:
+    st.session_state.selected_category = item_category
+    st.session_state.selected_brand = brand
+    st.session_state.custom_submodel_kw = custom_kw.strip()
+    query = build_category_brand_query(item_category, brand, custom_kw)
+    st.session_state.live_search_query = query
     st.session_state.live_scan_data = get_cached_live_scan(
-        st.session_state.live_search_query,
-        st.session_state.inc_reverb,
-        st.session_state.inc_goodwill,
-        st.session_state.inc_craigslist,
+        query=query,
+        item_category=item_category,
+        include_reverb=st.session_state.inc_reverb,
+        include_goodwill=st.session_state.inc_goodwill,
+        include_craigslist=st.session_state.inc_craigslist,
     )
     st.session_state.selected_listing_idx = 0
 
@@ -268,28 +321,32 @@ def appraise_listing_in_chat(listing: Dict[str, Any], reason_prefix: str = "Deep
     trace_id = uuid.uuid4().hex[:16]
     audit_notes = listing.get("audit_notes", [])
     audit_summary = " | ".join(audit_notes) if audit_notes else f"Resolved Market Tier -> '{listing['canonical_model']}'"
+    rec_offer = listing.get("recommended_offer_usd", 0.0)
+    profit_at_rec = listing.get("profit_at_recommended_offer_usd", 0.0)
+    max_offer = listing.get("max_offer_usd", 0.0)
+
     tool_steps = [
         {
-            "tool": "GuitarDataPlugin.NormalizeGuitarEra",
-            "input": f"title='{listing['title'][:60]}', platform='{listing['platform']}'",
+            "tool": "GuitarDataPlugin.NormalizeGearSubModel",
+            "input": f"category='{listing.get('item_category', 'Guitars')}', title='{listing['title'][:60]}'",
             "output": f"Exact Sub-Model Match -> '{listing['canonical_model']}'",
             "latency_ms": 1.6,
         },
         {
-            "tool": "GuitarDataPlugin.GetMarketStatsAsync",
-            "input": f"canonicalModel='{listing['canonical_model']}'",
-            "output": f"Sub-Model Resale Comp=${listing['estimated_comp_usd']:,.2f} ({audit_summary[:140]})",
+            "tool": "GuitarDataPlugin.GetUsedConditionCompAsync",
+            "input": f"canonicalModel='{listing['canonical_model']}', condition='{listing['condition']}'",
+            "output": f"Used Condition Resale Comp=${listing['estimated_comp_usd']:,.2f} ({audit_summary[:130]})",
             "latency_ms": 24.8,
         },
         {
-            "tool": "GuitarDataPlugin.EvaluateArbitrageOpportunityAsync",
+            "tool": "GuitarDataPlugin.ComputeOfferAndArbitrageTargets",
             "input": (
-                f"listingId='{listing['listing_id']}', ask=${listing['ask_price_usd']:,.2f}, "
-                f"ship=${listing['shipping_usd']:,.2f}, setup=${listing['bench_setup_usd']:,.2f}"
+                f"ask=${listing['ask_price_usd']:,.2f}, ship=${listing['shipping_usd']:,.2f}, "
+                f"prep=${listing['bench_setup_usd']:,.2f}, comp=${listing['estimated_comp_usd']:,.2f}"
             ),
             "output": (
-                f"AllInCost=${listing['all_in_cost_usd']:,.2f} | Fees=${listing['platform_fees_usd']:,.2f} | "
-                f"NetProfit=${listing['estimated_net_profit_usd']:+,.2f} ({listing['net_roi_pct']:+.1f}% ROI) -> {listing['signal']}"
+                f"RecommendedOffer=${rec_offer:,.2f} (+${profit_at_rec:,.2f} profit) | "
+                f"MaxBidCeiling=${max_offer:,.2f} | CurrentROI={listing['net_roi_pct']:+.1f}% -> {listing['signal']}"
             ),
             "latency_ms": 2.1,
         },
@@ -302,14 +359,15 @@ def appraise_listing_in_chat(listing: Dict[str, Any], reason_prefix: str = "Deep
 
     reply = (
         f"### 🔍 {reason_prefix}: **{listing['title']}**\n"
-        f"- **Platform & ID:** `{listing['platform']}` (`{listing['listing_id']}`) • **Location:** `{listing['location']}`\n"
-        f"- **Exact Sub-Model Comp Tier:** `{listing['canonical_model']}` (Condition: `{listing['condition']}`)\n"
-        f"- **All-In Cost Breakdown:** Ask `${listing['ask_price_usd']:,.2f}` + Shipping `${listing['shipping_usd']:,.2f}` "
-        f"+ Bench Setup `${listing['bench_setup_usd']:,.2f}` = **`${listing['all_in_cost_usd']:,.2f}`**\n"
-        f"- **Sub-Model Resale Comp:** `${listing['estimated_comp_usd']:,.2f}` (less `-${listing['platform_fees_usd']:,.2f}` Reverb 8.19% + $0.49 fee)\n"
+        f"- **Category & Platform:** `{listing.get('item_category', 'Guitars')}` • `{listing['platform']}` (`{listing['listing_id']}`) • `{listing['location']}`\n"
+        f"- **Matched Used Sub-Model Tier:** `{listing['canonical_model']}` (Condition: `{listing['condition']}`)\n"
+        f"- **Current All-In Cost:** Ask `${listing['ask_price_usd']:,.2f}` + Shipping `${listing['shipping_usd']:,.2f}` "
+        f"+ Prep/Test `${listing['bench_setup_usd']:,.2f}` = **`${listing['all_in_cost_usd']:,.2f}`**\n"
+        f"- **Used Condition Resale Comp:** `${listing['estimated_comp_usd']:,.2f}` (less `-${listing['platform_fees_usd']:,.2f}` Reverb 8.19% + $0.49 fee)\n"
+        f"- **Profit at Seller's Ask Price:** **`${listing['estimated_net_profit_usd']:+,.2f}`** (**`{listing['net_roi_pct']:+.1f}%` Net ROI**) — Signal: **`{listing['signal']}`**\n"
+        f"- 🎯 **Recommended Offer Price (25% Target ROI):** **`${rec_offer:,.2f}`** *(locks in **`+${profit_at_rec:,.2f}`** net flip profit)*\n"
+        f"- 🛑 **Suggested Maximum Offer / Max Bid (12% ROI Floor):** **`${max_offer:,.2f}`** *(Break-Even: `${listing.get('break_even_offer_usd', 0.0):,.2f}`)*\n"
         f"{audit_bullet_block}"
-        f"- **Estimated Net Flip Profit:** **`${listing['estimated_net_profit_usd']:+,.2f}`** (**`{listing['net_roi_pct']:+.1f}%` Net ROI**)\n"
-        f"- **Agent Recommendation:** **`{listing['signal']}`**\n"
         f"- 🔗 [**Open Original Listing on {listing['platform']}**]({listing['listing_url']})"
     )
 
@@ -328,31 +386,35 @@ def handle_user_chat_prompt(user_prompt: str) -> None:
     lower = user_prompt.lower()
     trace_id = uuid.uuid4().hex[:16]
 
-    search_models = [
-        ("gibson les paul", "Gibson Les Paul"),
-        ("les paul", "Gibson Les Paul"),
-        ("fender stratocaster", "Fender Stratocaster"),
-        ("stratocaster", "Fender Stratocaster"),
-        ("fender telecaster", "Fender Telecaster"),
-        ("telecaster", "Fender Telecaster"),
-        ("prs", "PRS Custom"),
-        ("ibanez", "Ibanez RG"),
-        ("martin", "Martin Guitar"),
-        ("epiphone", "Epiphone Les Paul"),
-        ("squier", "Squier Classic Vibe"),
-        ("gretsch", "Gretsch Guitar"),
+    chat_targets = [
+        ("shure", "Microphones & Studio Audio", "Shure"),
+        ("neumann", "Microphones & Studio Audio", "Neumann"),
+        ("sennheiser", "Microphones & Studio Audio", "Sennheiser"),
+        ("microphone", "Microphones & Studio Audio", "All Brands"),
+        ("mic", "Microphones & Studio Audio", "Shure"),
+        ("strymon", "Guitar Pedals & Effects", "Strymon"),
+        ("boss pedal", "Guitar Pedals & Effects", "Boss"),
+        ("jhs", "Guitar Pedals & Effects", "JHS"),
+        ("mxr", "Guitar Pedals & Effects", "MXR"),
+        ("pedal", "Guitar Pedals & Effects", "Boss"),
+        ("marshall", "Amplifiers & Heads", "Marshall"),
+        ("vox", "Amplifiers & Heads", "Vox"),
+        ("amp", "Amplifiers & Heads", "Fender"),
+        ("gretsch", "Guitars", "Gretsch"),
+        ("gibson", "Guitars", "Gibson"),
+        ("epiphone", "Guitars", "Epiphone"),
+        ("fender", "Guitars", "Fender"),
+        ("prs", "Guitars", "PRS"),
+        ("martin", "Guitars", "Martin"),
+        ("taylor", "Guitars", "Taylor"),
+        ("ibanez", "Guitars", "Ibanez"),
     ]
-    matched_query: Optional[str] = None
-    for kw, canonical_q in search_models:
+    for kw, cat, br in chat_targets:
         if kw in lower:
-            matched_query = canonical_q
-            break
-
-    if matched_query:
-        run_new_live_search(matched_query)
-        top_deal = get_active_listing()
-        appraise_listing_in_chat(top_deal, reason_prefix=f"Live Multi-Platform Scan Top Deal for '{matched_query}'")
-        return
+            execute_category_brand_scan(cat, br, "")
+            top_deal = get_active_listing()
+            appraise_listing_in_chat(top_deal, reason_prefix=f"Live Scan Top Deal ({cat} — {br})")
+            return
 
     if any(k in lower for k in ["sre", "dlq", "quarantine", "drift", "incident"]):
         report = st.session_state.pipeline_report
@@ -381,48 +443,29 @@ def handle_user_chat_prompt(user_prompt: str) -> None:
             }
         )
     else:
-        appraise_listing_in_chat(get_active_listing(), reason_prefix="Agent Appraisal of Selected Listing")
+        appraise_listing_in_chat(get_active_listing(), reason_prefix="Agent Appraisal & Offer Strategy")
 
 
 # ==============================================================================
-# SIDEBAR: LIVE MULTI-PLATFORM SEARCH & EXTERNAL LAUNCHERS
+# SIDEBAR: PLATFORM TOGGLES & EXTERNAL DEEP-SEARCH LAUNCHERS
 # ==============================================================================
 
 with st.sidebar:
-    st.markdown("## 🔎 Live Scanner Controls")
-    st.caption("Search real-time used, thrift, and local classified guitar listings across platforms:")
-
-    preset_queries = [
-        "Fender Stratocaster",
-        "Gibson Les Paul",
-        "Fender Telecaster",
-        "Epiphone Les Paul",
-        "Martin Guitar",
-        "PRS Guitar",
-        "Ibanez RG Guitar",
-        "Custom Search...",
-    ]
-    current_q = st.session_state.live_search_query
-    default_preset_idx = preset_queries.index(current_q) if current_q in preset_queries else 0
-    selected_preset = st.selectbox("Quick Model Search", preset_queries, index=default_preset_idx)
-    if selected_preset == "Custom Search...":
-        search_input = st.text_input("Enter Custom Guitar Search", value=st.session_state.live_search_query)
-    else:
-        search_input = selected_preset
-
+    st.markdown("## ⚙️ Platform & Launcher Settings")
     st.markdown("**Platforms to Scan Live:**")
     inc_rev = st.checkbox("Reverb API (Used Gear)", value=st.session_state.inc_reverb)
     inc_gw = st.checkbox("ShopGoodwill (Online Thrift Auctions)", value=st.session_state.inc_goodwill)
     inc_cl = st.checkbox("Craigslist (Local Owner Pickup)", value=st.session_state.inc_craigslist)
 
-    if st.button("🚀 Scan Live Platforms Now", use_container_width=True, type="primary"):
+    if (inc_rev != st.session_state.inc_reverb) or (inc_gw != st.session_state.inc_goodwill) or (inc_cl != st.session_state.inc_craigslist):
         st.session_state.inc_reverb = inc_rev
         st.session_state.inc_goodwill = inc_gw
         st.session_state.inc_craigslist = inc_cl
-        with st.spinner(f"Scanning Reverb, ShopGoodwill & Craigslist for '{search_input}'..."):
-            run_new_live_search(search_input)
-            top = get_active_listing()
-            appraise_listing_in_chat(top, reason_prefix=f"Live Scan Completed ('{search_input}')")
+        execute_category_brand_scan(
+            st.session_state.selected_category,
+            st.session_state.selected_brand,
+            st.session_state.custom_submodel_kw,
+        )
         st.rerun()
 
     st.divider()
@@ -445,39 +488,77 @@ with st.sidebar:
 
 
 # ==============================================================================
-# HEADER & MOBILE-FRIENDLY QUICK SEARCH BAR
+# HEADER & CATEGORY + BRAND FILTER BAR
 # ==============================================================================
 
-st.markdown("## 🎸 Live Multi-Platform Guitar Arbitrage & Agentic Workbench")
+st.markdown("## 🎸 Live Music Gear Arbitrage, Offer Calculator & Agentic Workbench")
 
-# Top Quick-Search Bar (Always visible on mobile & desktop without opening sidebar!)
-qcol1, qcol2, qcol3 = st.columns([2.2, 1.2, 1.0], gap="small")
-with qcol1:
-    quick_models = [
-        "Fender Stratocaster",
-        "Gibson Les Paul",
-        "Fender Telecaster",
-        "Epiphone Les Paul",
-        "Martin Guitar",
-        "PRS Guitar",
-        "Ibanez RG Guitar",
-    ]
-    cur_idx = quick_models.index(st.session_state.live_search_query) if st.session_state.live_search_query in quick_models else 0
-    top_selected_model = st.selectbox(
-        "🎸 Select Guitar Model to Scan Across Reverb, Goodwill & Craigslist:",
-        options=quick_models,
-        index=cur_idx,
-        key="top_model_selector",
+category_options = list(CATEGORY_CATALOG.keys())
+cat_idx = (
+    category_options.index(st.session_state.selected_category)
+    if st.session_state.selected_category in category_options
+    else 0
+)
+
+fcol1, fcol2, fcol3, fcol4 = st.columns([1.35, 1.35, 1.3, 0.9], gap="small")
+
+with fcol1:
+    chosen_category = st.selectbox(
+        "🎛️ 1. Item Type / Category:",
+        options=category_options,
+        index=cat_idx,
     )
-    if top_selected_model != st.session_state.live_search_query:
-        with st.spinner(f"Scanning live marketplaces for '{top_selected_model}'..."):
-            run_new_live_search(top_selected_model)
-            appraise_listing_in_chat(get_active_listing(), reason_prefix=f"Switched Model Scan ('{top_selected_model}')")
-        st.rerun()
 
-with qcol2:
+brand_options = CATEGORY_CATALOG[chosen_category]["brands"]
+if chosen_category != st.session_state.selected_category:
+    default_brand_idx = 1 if len(brand_options) > 1 else 0
+else:
+    default_brand_idx = (
+        brand_options.index(st.session_state.selected_brand)
+        if st.session_state.selected_brand in brand_options
+        else 0
+    )
+
+with fcol2:
+    chosen_brand = st.selectbox(
+        "🏷️ 2. Brand Filter:",
+        options=brand_options,
+        index=default_brand_idx,
+    )
+
+with fcol3:
+    chosen_custom_kw = st.text_input(
+        "🔎 3. Optional Model / Keyword (e.g. SM7B, Tube Screamer, Les Paul):",
+        value=st.session_state.custom_submodel_kw if chosen_category == st.session_state.selected_category else "",
+        placeholder="Leave blank for all models...",
+    )
+
+with fcol4:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+    scan_clicked = st.button("🚀 Scan Deals", use_container_width=True, type="primary")
+
+# Trigger scan automatically when Category or Brand dropdown changes, or when Scan button is clicked
+if (
+    scan_clicked
+    or chosen_category != st.session_state.selected_category
+    or chosen_brand != st.session_state.selected_brand
+    or chosen_custom_kw.strip() != st.session_state.custom_submodel_kw
+):
+    with st.spinner(
+        f"Scanning Reverb, ShopGoodwill & Craigslist for {chosen_category} ({chosen_brand} {chosen_custom_kw})..."
+    ):
+        execute_category_brand_scan(chosen_category, chosen_brand, chosen_custom_kw)
+        appraise_listing_in_chat(
+            get_active_listing(),
+            reason_prefix=f"Live Scan ({chosen_category} • {chosen_brand})",
+        )
+    st.rerun()
+
+# Chart Display Controls
+vcol1, vcol2 = st.columns(2, gap="small")
+with vcol1:
     chart_filter_mode = st.selectbox(
-        "📊 Chart Display Filter:",
+        "📊 Listings Shown in Chart:",
         options=[
             "Top 6 Best Deals (Crisp & Uncrowded)",
             "Top 10 Deals",
@@ -485,18 +566,16 @@ with qcol2:
             "All Scanned Listings",
         ],
         index=0,
-        key="chart_filter_selector",
     )
-
-with qcol3:
+with vcol2:
     chart_metric_mode = st.selectbox(
-        "📐 Bar Chart View:",
+        "📐 Chart Comparison Mode:",
         options=[
-            "Cost vs. Comp + Net Profit",
+            "All-In Cost vs. Resale Comp vs. Net Profit",
+            "Seller Ask vs. Recommended Offer vs. Max Bid",
             "Net Flip Profit ($) Only",
         ],
         index=0,
-        key="chart_metric_selector",
     )
 
 scan_data = st.session_state.live_scan_data
@@ -504,51 +583,53 @@ live_listings: List[Dict[str, Any]] = scan_data.get("listings", [])
 active_listing = get_active_listing()
 report = st.session_state.pipeline_report
 
-# Responsive KPI Row (2x2 on mobile, 4 across on desktop)
+# ==============================================================================
+# EXECUTIVE KPI STRIP (WITH RECOMMENDED OFFER & MAX AUCTION BID)
+# ==============================================================================
+
 kpi_left, kpi_right = st.columns(2, gap="medium")
 with kpi_left:
     k1, k2 = st.columns(2)
     dups_removed = scan_data.get("duplicates_removed", 0)
     k1.metric(
-        label=f"Verified Deals ('{scan_data['query']}')",
-        value=f"{len(live_listings)} Listings",
-        delta=f"{dups_removed} Duplicates Filtered",
+        label=f"Selected Ask + Prep ({active_listing['platform'].split()[0]})",
+        value=f"${active_listing['all_in_cost_usd']:,.0f} All-In",
+        delta=f"Ask ${active_listing['ask_price_usd']:,.0f} + Ship ${active_listing['shipping_usd']:,.0f} + ${active_listing['bench_setup_usd']:,.0f} Prep",
     )
     k2.metric(
-        label="Selected All-In Cost",
-        value=f"${active_listing['all_in_cost_usd']:,.0f}",
-        delta=f"Ask ${active_listing['ask_price_usd']:,.0f} + Ship ${active_listing['shipping_usd']:,.0f} + ${active_listing['bench_setup_usd']:,.0f} Setup",
+        label="Used Condition Comp",
+        value=f"${active_listing['estimated_comp_usd']:,.0f}",
+        delta=f"Profit @ Ask: ${active_listing['estimated_net_profit_usd']:+,.0f} ({active_listing['net_roi_pct']:+.1f}%)",
     )
 with kpi_right:
     k3, k4 = st.columns(2)
     k3.metric(
-        label="Sub-Model Comp",
-        value=f"${active_listing['estimated_comp_usd']:,.0f}",
-        delta=f"Fees: -${active_listing['platform_fees_usd']:,.0f} (8.19%)",
+        label="🎯 Recommended Offer (25% ROI)",
+        value=f"${active_listing.get('recommended_offer_usd', 0.0):,.0f}",
+        delta=f"Locks in +${active_listing.get('profit_at_recommended_offer_usd', 0.0):,.0f} Net Profit",
     )
     k4.metric(
-        label="Est. Net Flip Profit",
-        value=f"${active_listing['estimated_net_profit_usd']:+,.0f} ({active_listing['net_roi_pct']:+.1f}%)",
-        delta=f"Signal: {active_listing['signal']}",
+        label="🛑 Suggested Max Offer / Bid",
+        value=f"${active_listing.get('max_offer_usd', 0.0):,.0f}",
+        delta=f"12% ROI Ceiling (Break-Even: ${active_listing.get('break_even_offer_usd', 0.0):,.0f})",
     )
 
 
 # ==============================================================================
-# FULL-WIDTH NAVIGATION TABS (100% WIDTH FOR READABLE CHARTS & MOBILE)
+# FULL-WIDTH NAVIGATION TABS
 # ==============================================================================
 
 tab_live, tab_copilot, tab_waterfall, tab_sre = st.tabs(
     [
-        "🔥 1. Live Deals Chart & Photo Deep-Dive",
+        "🔥 1. Live Deals, Offer Calculator & Photo Inspector",
         "🤖 2. Agentic AI Copilot & Tool Traces",
-        "💧 3. Selected Deal Profit Waterfall",
+        "💧 3. Selected Deal Profit & Offer Waterfall",
         "🛡️ 4. SRE Dead-Letter Queue & Telemetry",
     ]
 )
 
 with tab_live:
     if live_listings:
-        # Filter listings for the chart based on user's chosen filter mode
         indexed_listings = list(enumerate(live_listings))
         if chart_filter_mode.startswith("Top 6"):
             filtered_indexed = indexed_listings[:6]
@@ -560,11 +641,9 @@ with tab_live:
         else:
             filtered_indexed = indexed_listings
 
-        # Ensure currently selected listing is visible or accessible
         df_chart = pd.DataFrame([item for _, item in filtered_indexed])
         df_chart["orig_idx"] = [i for i, _ in filtered_indexed]
 
-        # Build clean, readable left-hand Y-axis labels (Platform + clean title + ROI badge)
         def _format_row_label(row: pd.Series) -> str:
             idx_num = int(row["orig_idx"]) + 1
             plat_short = row["platform"].split()[0]
@@ -575,27 +654,24 @@ with tab_live:
             return f"{marker}#{idx_num} [{plat_short}] {clean_t}"
 
         df_chart["row_label"] = df_chart.apply(_format_row_label, axis=1)
-
-        # Reverse order so #1 Best Deal appears at the TOP of the horizontal bar chart
         df_plot = df_chart.iloc[::-1].reset_index(drop=True)
 
         st.markdown(
-            f"#### 📊 Ranked Arbitrage Comparison — **`{scan_data['query']}`** "
-            "*(Tap any bar or use the buttons below to inspect photos & audit details)*"
+            f"#### 📊 Live `{scan_data.get('item_category', 'Gear')}` Arbitrage — **`{scan_data['query']}`** "
+            "*(Tap any bar or use the buttons below to inspect photos & offer targets)*"
         )
 
-        # Calculate spacious dynamic height (72px per guitar row, minimum 360px)
         num_rows = len(df_plot)
-        dynamic_height = max(360, num_rows * 74 + 90)
+        dynamic_height = max(360, num_rows * 76 + 90)
 
         max_val = max(
             float(df_plot["all_in_cost_usd"].max()),
             float(df_plot["estimated_comp_usd"].max()),
-            float(df_plot["estimated_net_profit_usd"].max()),
+            float(df_plot["ask_price_usd"].max()),
             100.0,
         )
         min_val = min(0.0, float(df_plot["estimated_net_profit_usd"].min()))
-        x_padding_max = max_val * 1.26
+        x_padding_max = max_val * 1.28
         x_padding_min = min_val * 1.28 if min_val < 0 else 0.0
 
         comp_fig = go.Figure()
@@ -603,7 +679,7 @@ with tab_live:
         if chart_metric_mode == "Net Flip Profit ($) Only":
             comp_fig.add_trace(
                 go.Bar(
-                    name="Estimated Net Profit (After 8.19% Reverb Fee & Setup)",
+                    name="Est. Net Profit at Ask Price",
                     y=df_plot["row_label"],
                     x=df_plot["estimated_net_profit_usd"],
                     orientation="h",
@@ -612,23 +688,74 @@ with tab_live:
                         "#10b981" if v > 0 else "#f43f5e" for v in df_plot["estimated_net_profit_usd"]
                     ],
                     text=[
-                        f"  {'+' if v >= 0 else ''}${v:,.0f} ({r:+.1f}% ROI)  "
-                        for v, r in zip(df_plot["estimated_net_profit_usd"], df_plot["net_roi_pct"])
+                        f"  {'+' if v >= 0 else ''}${v:,.0f} ({r:+.1f}% ROI) | Rec Offer: ${ro:,.0f}  "
+                        for v, r, ro in zip(
+                            df_plot["estimated_net_profit_usd"],
+                            df_plot["net_roi_pct"],
+                            df_plot["recommended_offer_usd"],
+                        )
                     ],
                     textposition="outside",
-                    textfont=dict(size=13, family="Arial, sans-serif"),
+                    textfont=dict(size=12, family="Arial, sans-serif"),
                     cliponaxis=False,
                     hovertemplate=(
                         "<b>%{y}</b><br>"
-                        "Est. Net Flip Profit: <b>$%{x:,.2f}</b><br>"
-                        "<i>Tap bar to inspect listing photos & valuation audit</i><extra></extra>"
+                        "Est. Net Profit @ Ask: <b>$%{x:,.2f}</b><br>"
+                        "<i>Tap bar to inspect photos & offer strategy</i><extra></extra>"
                     ),
+                )
+            )
+        elif chart_metric_mode == "Seller Ask vs. Recommended Offer vs. Max Bid":
+            x_padding_min = 0.0
+            comp_fig.add_trace(
+                go.Bar(
+                    name="Current Seller Ask / Bid ($)",
+                    y=df_plot["row_label"],
+                    x=df_plot["ask_price_usd"],
+                    orientation="h",
+                    customdata=df_plot["orig_idx"],
+                    marker_color="#6366f1",
+                    text=[f" ${v:,.0f} Ask " for v in df_plot["ask_price_usd"]],
+                    textposition="outside",
+                    textfont=dict(size=12, family="Arial, sans-serif"),
+                    cliponaxis=False,
+                )
+            )
+            comp_fig.add_trace(
+                go.Bar(
+                    name="🎯 Recommended Offer (25% Net ROI)",
+                    y=df_plot["row_label"],
+                    x=df_plot["recommended_offer_usd"],
+                    orientation="h",
+                    customdata=df_plot["orig_idx"],
+                    marker_color="#10b981",
+                    text=[
+                        f" ${ro:,.0f} Rec (+${pr:,.0f} Profit) "
+                        for ro, pr in zip(df_plot["recommended_offer_usd"], df_plot["profit_at_recommended_offer_usd"])
+                    ],
+                    textposition="outside",
+                    textfont=dict(size=12, family="Arial, sans-serif"),
+                    cliponaxis=False,
+                )
+            )
+            comp_fig.add_trace(
+                go.Bar(
+                    name="🛑 Suggested Max Offer / Bid (12% ROI Floor)",
+                    y=df_plot["row_label"],
+                    x=df_plot["max_offer_usd"],
+                    orientation="h",
+                    customdata=df_plot["orig_idx"],
+                    marker_color="#f59e0b",
+                    text=[f" ${v:,.0f} Max Bid " for v in df_plot["max_offer_usd"]],
+                    textposition="outside",
+                    textfont=dict(size=12, family="Arial, sans-serif"),
+                    cliponaxis=False,
                 )
             )
         else:
             comp_fig.add_trace(
                 go.Bar(
-                    name="All-In Cost (Ask + Ship + Setup)",
+                    name="All-In Cost (Ask + Ship + Prep)",
                     y=df_plot["row_label"],
                     x=df_plot["all_in_cost_usd"],
                     orientation="h",
@@ -638,16 +765,11 @@ with tab_live:
                     textposition="outside",
                     textfont=dict(size=12, family="Arial, sans-serif"),
                     cliponaxis=False,
-                    hovertemplate=(
-                        "<b>%{y}</b><br>"
-                        "All-In Cost: <b>$%{x:,.2f}</b><br>"
-                        "<i>Tap bar to inspect listing photos & valuation audit</i><extra></extra>"
-                    ),
                 )
             )
             comp_fig.add_trace(
                 go.Bar(
-                    name="Sub-Model Resale Comp ($)",
+                    name="Used Condition Resale Comp ($)",
                     y=df_plot["row_label"],
                     x=df_plot["estimated_comp_usd"],
                     orientation="h",
@@ -657,11 +779,6 @@ with tab_live:
                     textposition="outside",
                     textfont=dict(size=12, family="Arial, sans-serif"),
                     cliponaxis=False,
-                    hovertemplate=(
-                        "<b>%{y}</b><br>"
-                        "Sub-Model Resale Comp: <b>$%{x:,.2f}</b><br>"
-                        "<i>Tap bar to inspect listing photos & valuation audit</i><extra></extra>"
-                    ),
                 )
             )
             comp_fig.add_trace(
@@ -681,11 +798,6 @@ with tab_live:
                     textposition="outside",
                     textfont=dict(size=12, family="Arial, sans-serif"),
                     cliponaxis=False,
-                    hovertemplate=(
-                        "<b>%{y}</b><br>"
-                        "Est. Net Profit: <b>$%{x:,.2f}</b><br>"
-                        "<i>Tap bar to inspect listing photos & valuation audit</i><extra></extra>"
-                    ),
                 )
             )
 
@@ -696,7 +808,7 @@ with tab_live:
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             height=dynamic_height,
-            margin=dict(l=10, r=95, t=45, b=35),
+            margin=dict(l=10, r=105, t=45, b=35),
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
@@ -732,7 +844,6 @@ with tab_live:
             config={"displayModeBar": False},
         )
 
-        # Handle bar click -> map back to original listing index via customdata or point_index
         if chart_event and chart_event.get("selection") and chart_event["selection"].get("points"):
             clicked_pt = chart_event["selection"]["points"][0]
             cdata = clicked_pt.get("customdata")
@@ -772,11 +883,15 @@ with tab_live:
                 st.rerun()
         with nav_select:
             listing_labels = [
-                f"#{i+1} [{item['platform'].split()[0]}] {item['title'][:52]} — Cost: ${item['all_in_cost_usd']:,.0f} | Comp: ${item['estimated_comp_usd']:,.0f} | Net: ${item['estimated_net_profit_usd']:+,.0f} ({item['net_roi_pct']:+.1f}%)"
+                (
+                    f"#{i+1} [{item['platform'].split()[0]}] {item['title'][:46]} — "
+                    f"Ask: ${item['ask_price_usd']:,.0f} | Rec Offer: ${item.get('recommended_offer_usd', 0):,.0f} "
+                    f"(Max: ${item.get('max_offer_usd', 0):,.0f}) | Comp: ${item['estimated_comp_usd']:,.0f}"
+                )
                 for i, item in enumerate(live_listings)
             ]
             chosen_idx = st.selectbox(
-                "📌 Selected Listing to Inspect (Tap any bar above or choose here):",
+                "📌 Selected Listing to Inspect:",
                 options=list(range(len(live_listings))),
                 format_func=lambda i: listing_labels[i],
                 index=st.session_state.selected_listing_idx,
@@ -789,21 +904,21 @@ with tab_live:
                 st.rerun()
 
         # ======================================================================
-        # DEEP-DIVE LISTING INSPECTOR (PHOTOS, AUDIT TRAIL, FINANCIALS, LINK)
+        # DEEP-DIVE LISTING INSPECTOR (LEFT/RIGHT PHOTO ARROWS + OFFER STRATEGY)
         # ======================================================================
         sig = active_listing["signal"]
         sig_class = (
             "signal-badge-buy"
             if "BUY" in sig
-            else ("signal-badge-hold" if "HOLD" in sig else "signal-badge-pass")
+            else ("signal-badge-hold" if ("HOLD" in sig or "OFFER" in sig) else "signal-badge-pass")
         )
 
         st.markdown("<div class='deep-dive-card'>", unsafe_allow_html=True)
         st.markdown(
             f"### 📸 Inspected Listing #{st.session_state.selected_listing_idx + 1}: **{active_listing['title']}**\n"
             f"<span class='platform-badge'>{active_listing['platform']}</span> "
-            f"<span class='{sig_class}'>{sig} ({active_listing['net_roi_pct']:+.1f}% ROI)</span> &nbsp; "
-            f"**ID:** `{active_listing['listing_id']}` • "
+            f"<span class='{sig_class}'>{sig} ({active_listing['net_roi_pct']:+.1f}% ROI @ Ask)</span> &nbsp; "
+            f"**Category:** `{active_listing.get('item_category', 'Guitars')}` • "
             f"**Seller:** `{active_listing['seller_name']}` • "
             f"**Location:** `{active_listing['location']}` • "
             f"**Condition:** `{active_listing['condition']}`",
@@ -814,23 +929,37 @@ with tab_live:
 
         with img_col:
             photos = active_listing.get("image_urls", [])
+            lid_key = active_listing["listing_id"]
             if photos:
-                photo_idx = (
-                    st.slider(
-                        f"Browse Listing Photos ({len(photos)} available)",
-                        min_value=1,
-                        max_value=len(photos),
-                        value=1,
-                        key=f"photo_slider_{active_listing['listing_id']}",
-                    )
-                    if len(photos) > 1
-                    else 1
-                )
+                cur_p_idx = st.session_state.photo_indices.get(lid_key, 0)
+                if cur_p_idx >= len(photos) or cur_p_idx < 0:
+                    cur_p_idx = 0
+
+                # Left / Right Arrow Buttons for Photo Navigation (replaces number slider!)
+                if len(photos) > 1:
+                    p_prev, p_count, p_next = st.columns([1.1, 1.6, 1.1], gap="small")
+                    with p_prev:
+                        if st.button("⬅️ Prev Photo", key=f"prev_photo_{lid_key}", use_container_width=True):
+                            cur_p_idx = (cur_p_idx - 1) % len(photos)
+                            st.session_state.photo_indices[lid_key] = cur_p_idx
+                            st.rerun()
+                    with p_count:
+                        st.markdown(
+                            f"<div class='photo-counter-pill'>📷 Photo {cur_p_idx + 1} of {len(photos)}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with p_next:
+                        if st.button("Next Photo ➡️", key=f"next_photo_{lid_key}", use_container_width=True):
+                            cur_p_idx = (cur_p_idx + 1) % len(photos)
+                            st.session_state.photo_indices[lid_key] = cur_p_idx
+                            st.rerun()
+
                 st.image(
-                    photos[photo_idx - 1],
-                    caption=f"Photo {photo_idx} of {len(photos)} — {active_listing['title'][:65]}",
+                    photos[cur_p_idx],
+                    caption=f"Photo {cur_p_idx + 1} of {len(photos)} — {active_listing['title'][:65]}",
                     use_container_width=True,
                 )
+
                 if len(photos) > 1:
                     thumb_cols = st.columns(min(4, len(photos)))
                     for t_i, t_col in enumerate(thumb_cols):
@@ -840,26 +969,68 @@ with tab_live:
                 st.info("No images attached to this listing.")
 
         with info_col:
-            st.markdown("#### 💰 Real-World Flip & All-In Cost Breakdown")
+            # 1. Highlighted Offer & Max Auction Bid Strategy Box
+            rec_offer = active_listing.get("recommended_offer_usd", 0.0)
+            profit_at_rec = active_listing.get("profit_at_recommended_offer_usd", 0.0)
+            max_offer = active_listing.get("max_offer_usd", 0.0)
+            break_even = active_listing.get("break_even_offer_usd", 0.0)
+            ask_p = active_listing["ask_price_usd"]
+
+            offer_vs_ask_diff = ask_p - rec_offer
+            if offer_vs_ask_diff <= 0:
+                offer_headline = (
+                    f"✅ **Already Below Target Offer!** Current ask/bid (`${ask_p:,.2f}`) is **`${abs(offer_vs_ask_diff):,.2f}` below** "
+                    f"our recommended offer price (`${rec_offer:,.2f}`)."
+                )
+            else:
+                pct_discount_needed = (offer_vs_ask_diff / ask_p * 100.0) if ask_p > 0 else 0.0
+                offer_headline = (
+                    f"💡 **Negotiation Target:** Offer **`${rec_offer:,.2f}`** (`-{pct_discount_needed:.0f}%` off `${ask_p:,.2f}` ask) "
+                    f"to turn this into a **`+${profit_at_rec:,.2f}`** (`~25% ROI`) profitable flip!"
+                )
+
+            st.markdown("<div class='offer-strategy-box'>", unsafe_allow_html=True)
+            st.markdown("#### 🎯 Recommended Offer & Auction Bid Strategy")
+            st.markdown(offer_headline)
+            o1, o2, o3 = st.columns(3)
+            o1.metric(
+                "Recommended Offer",
+                f"${rec_offer:,.2f}",
+                delta=f"+${profit_at_rec:,.0f} Profit (~25% ROI)",
+            )
+            o2.metric(
+                "Suggested Max Offer / Bid",
+                f"${max_offer:,.2f}",
+                delta="12% Min ROI Ceiling",
+            )
+            o3.metric(
+                "Break-Even Price",
+                f"${break_even:,.2f}",
+                delta="0% ROI Walk-Away",
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # 2. Current Ask Price Financials
+            st.markdown("#### 💰 Breakdown at Seller's Current Price")
             m1, m2, m3 = st.columns(3)
             m1.metric("Seller Ask / Bid", f"${active_listing['ask_price_usd']:,.2f}")
-            m2.metric("Shipping + Setup", f"${active_listing['shipping_usd'] + active_listing['bench_setup_usd']:,.2f}")
+            m2.metric("Shipping + Prep", f"${active_listing['shipping_usd'] + active_listing['bench_setup_usd']:,.2f}")
             m3.metric("Total All-In Cost", f"${active_listing['all_in_cost_usd']:,.2f}")
 
             m4, m5, m6 = st.columns(3)
-            m4.metric("Sub-Model Comp", f"${active_listing['estimated_comp_usd']:,.2f}")
+            m4.metric("Used Condition Comp", f"${active_listing['estimated_comp_usd']:,.2f}")
             m5.metric("Reverb 8.19% Fee", f"-${active_listing['platform_fees_usd']:,.2f}")
             m6.metric(
-                "Est. Net Profit",
+                "Profit @ Current Ask",
                 f"${active_listing['estimated_net_profit_usd']:+,.2f}",
                 delta=f"{active_listing['net_roi_pct']:+.1f}% Net ROI",
             )
 
-            st.markdown(f"**Matched Sub-Model Tier:** `{active_listing['canonical_model']}`")
+            st.markdown(f"**Matched Used Sub-Model Tier:** `{active_listing['canonical_model']}`")
 
             audit_notes = active_listing.get("audit_notes", [])
             if audit_notes:
-                st.markdown("**🔍 Post Investigation & Exact-Model Comp Audit:**")
+                st.markdown("**🔍 Post Investigation & Valuation Audit:**")
                 for note in audit_notes:
                     st.markdown(f"- {note}")
 
@@ -883,7 +1054,7 @@ with tab_live:
 
         st.markdown("</div>", unsafe_allow_html=True)
     else:
-        st.warning("No live listings returned. Try selecting another guitar model above.")
+        st.warning("No live listings returned for this filter. Try another brand or keyword above.")
 
 
 # ==============================================================================
@@ -893,26 +1064,26 @@ with tab_live:
 with tab_copilot:
     st.markdown("### 🤖 Glass-Box Semantic Kernel Agent Copilot")
     st.caption(
-        "Ask about any guitar model or click a quick-scan button below—the agent scans live listings, "
-        "runs `GuitarDataPlugin` tools, and logs full OpenTelemetry tool traces."
+        "Ask about any music gear category or brand—the agent scans live listings, "
+        "calculates Recommended & Maximum Offer prices, and logs full OpenTelemetry tool traces."
     )
 
     pcol1, pcol2, pcol3, pcol4 = st.columns(4)
     with pcol1:
-        if st.button("🎸 Scan Gibson Les Pauls", use_container_width=True):
-            handle_user_chat_prompt("Scan live marketplaces for Gibson Les Paul flips.")
+        if st.button("🎸 Scan Gretsch Guitars", use_container_width=True):
+            handle_user_chat_prompt("Scan live marketplaces for Gretsch guitars.")
             st.rerun()
     with pcol2:
-        if st.button("⚡ Scan Fender Strats", use_container_width=True):
-            handle_user_chat_prompt("Scan live marketplaces for Fender Stratocaster flips.")
+        if st.button("🎛️ Scan Strymon Pedals", use_container_width=True):
+            handle_user_chat_prompt("Scan live marketplaces for Strymon guitar pedals.")
             st.rerun()
     with pcol3:
-        if st.button("🌲 Scan Martin Acoustics", use_container_width=True):
-            handle_user_chat_prompt("Scan live marketplaces for Martin acoustic guitars.")
+        if st.button("🎙️ Scan Shure Microphones", use_container_width=True):
+            handle_user_chat_prompt("Scan live marketplaces for Shure microphones.")
             st.rerun()
     with pcol4:
-        if st.button("🔥 Scan Epiphone Deals", use_container_width=True):
-            handle_user_chat_prompt("Scan live marketplaces for Epiphone Les Paul guitars.")
+        if st.button("🔊 Scan Marshall Amps", use_container_width=True):
+            handle_user_chat_prompt("Scan live marketplaces for Marshall amplifiers.")
             st.rerun()
 
     chat_container = st.container(height=520)
@@ -939,7 +1110,7 @@ with tab_copilot:
                     )
 
     user_query = st.chat_input(
-        "Ask to scan any guitar (e.g. 'Scan live Telecaster deals', 'Scan Martin acoustic') or appraise selected..."
+        "Ask to scan any gear (e.g. 'Scan Shure microphones', 'Scan Boss pedals', 'Scan Gretsch guitars')..."
     )
     if user_query:
         handle_user_chat_prompt(user_query)
@@ -960,12 +1131,12 @@ with tab_waterfall:
             orientation="v",
             measure=["absolute", "relative", "relative", "relative", "relative", "total"],
             x=[
-                "Sub-Model Resale Comp",
+                "Used Condition Comp",
                 "Seller Ask Price",
                 "Inbound Shipping",
-                f"Bench Setup (${active_listing['bench_setup_usd']:,.0f})",
+                f"Prep / Test (${active_listing['bench_setup_usd']:,.0f})",
                 "Reverb Fees (8.19%)",
-                "Est. Net Profit",
+                "Est. Net Profit @ Ask",
             ],
             textposition="outside",
             textfont=dict(size=13),
