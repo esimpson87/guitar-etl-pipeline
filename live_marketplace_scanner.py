@@ -327,6 +327,7 @@ NOISE_WORDS = {
     "rms", "compact", "combo", "gain", "eq", "controls", "control", "channel", "channels",
     "speaker", "speakers", "solid", "state", "amplifier", "amplifiers", "amp", "amps",
     "guitar", "guitars", "electric", "acoustic",
+    "handheld", "dynamic", "vocal", "vocals", "cardioid", "condenser", "microphone", "microphones", "mic", "mics", "capsule",
 }
 
 GENERIC_QUERY_WORDS = {
