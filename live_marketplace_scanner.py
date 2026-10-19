@@ -95,8 +95,8 @@ NOISE_WORDS = {
     "pattern", "hpl", "koa", "spruce", "mahogany", "maple", "rosewood", "pau", "ferro",
     "fingerboard", "fretboard", "neck", "body", "top", "figured", "flamed", "quilted",
     "excellent", "mint", "good", "fair", "condition", "used", "new", "brand",
-    "tested", "not", "untested", "working", "great", "nice", "rare", "custom",
-    "special", "ed", "edition", "series", "collection", "the", "by", "in", "for", "sale",
+    "tested", "not", "untested", "working", "great", "nice", "rare",
+    "ed", "edition", "series", "collection", "the", "by", "in", "for", "sale",
     "and", "or", "includes", "included", "free", "shipping", "fast", "local", "pickup",
     "cond", "mint", "trade", "survivor",
 }
@@ -302,7 +302,7 @@ def extract_specific_model_query(
             continue
         if low in NOISE_WORDS:
             continue
-        if low.isdigit() and low not in {"335", "339", "175", "18", "28", "15", "24", "550", "450", "350", "50", "60"}:
+        if low.isdigit() and low not in {"335", "339", "175", "100", "18", "28", "15", "24", "550", "450", "350", "50", "60"}:
             continue
         if low not in [k.lower() for k in kept]:
             kept.append(tok)
@@ -404,8 +404,8 @@ def lookup_live_reverb_comp_for_model(
 
                 # 3. Require token overlap with extracted model signature
                 if query_tokens:
-                    matches = sum(1 for qt in query_tokens[:3] if qt in title_low)
-                    if matches < min(2, len(query_tokens)):
+                    matches = sum(1 for qt in query_tokens[:4] if qt in title_low)
+                    if matches < min(3, len(query_tokens)):
                         continue
 
                 p_str = item.get("price", {}).get("amount")
@@ -413,9 +413,8 @@ def lookup_live_reverb_comp_for_model(
                     try:
                         p_val = float(p_str)
                         if p_val >= 65.0:
-                            # Also reject individual comp outliers that exceed 1.45x of standard tier baseline
-                            # when the source guitar is a standard production model
-                            if not source_is_custom_or_vintage and heuristic_val >= 300.0 and p_val > heuristic_val * 1.45:
+                            # Reject individual comp outliers that exceed 1.45x of standard tier baseline
+                            if not source_is_custom_or_vintage and heuristic_val >= 110.0 and p_val > heuristic_val * 1.45:
                                 polluted_excluded += 1
                                 continue
                             matched_prices.append(p_val)
@@ -431,7 +430,7 @@ def lookup_live_reverb_comp_for_model(
                 realized_sold_comp = round(clean_median_ask * 0.88, 2)
 
                 # Final retail sanity ceiling for non-Custom-Shop production models
-                if not source_is_custom_or_vintage and heuristic_val >= 300.0:
+                if not source_is_custom_or_vintage and heuristic_val >= 110.0:
                     max_used_ceiling = round(heuristic_val * 1.15, 2)
                     if realized_sold_comp > max_used_ceiling:
                         realized_sold_comp = max_used_ceiling
@@ -480,10 +479,12 @@ def _heuristic_tier_comp(title: str) -> Tuple[str, float]:
         return ("Squier by Fender Electric", 150.00)
 
     if "epiphone" in lower:
-        if "1959" in lower or "inspired by gibson" in lower or "custom" in lower:
+        if any(k in lower for k in ("special", "sl", "junior", "jr", "dr-100", "pro-1", "les paul 100", "lp-100", "lp100", "express")):
+            return ("Epiphone Entry / Special / LP-100 Series", 145.00)
+        if "tribute" in lower or "studio" in lower:
+            return ("Epiphone Studio / Tribute Series", 245.00)
+        if "1959" in lower or "inspired by gibson" in lower or "ibgc" in lower or "custom" in lower:
             return ("Epiphone Inspired by Gibson / Custom", 575.00)
-        if "special" in lower or "sl" in lower or "junior" in lower or "dr-100" in lower or "pro-1" in lower:
-            return ("Epiphone Entry / Special Series", 145.00)
         return ("Epiphone Standard Series", 385.00)
 
     is_gibson_family = "gibson" in lower or (
@@ -987,12 +988,19 @@ def fetch_live_craigslist_listings(query: str, max_items: int = 5) -> List[LiveG
         locations = decode.get("locations", [])
         items = data.get("items", [])
 
+        q_tokens = [
+            t.lower()
+            for t in re.findall(r"[A-Za-z0-9]+", query)
+            if len(t) >= 3 and t.lower() not in {"guitar", "guitars", "electric", "acoustic"}
+        ]
         results: List[LiveGuitarListing] = []
         for raw_item in items:
             if not isinstance(raw_item, list) or len(raw_item) < 6:
                 continue
             title = raw_item[-1] if isinstance(raw_item[-1], str) else ""
             if not title or not _is_valid_guitar_title(title):
+                continue
+            if q_tokens and not any(qt in title.lower() for qt in q_tokens):
                 continue
 
             price_val = raw_item[3]
