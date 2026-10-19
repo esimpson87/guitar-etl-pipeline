@@ -324,6 +324,9 @@ NOISE_WORDS = {
     "and", "or", "includes", "included", "free", "shipping", "fast", "local", "pickup",
     "cond", "mint", "trade", "survivor", "box", "power", "supply",
     "weird", "cool", "crazy", "sweet", "awesome", "vintage", "old", "custom", "funky",
+    "rms", "compact", "combo", "gain", "eq", "controls", "control", "channel", "channels",
+    "speaker", "speakers", "solid", "state", "amplifier", "amplifiers", "amp", "amps",
+    "guitar", "guitars", "electric", "acoustic",
 }
 
 GENERIC_QUERY_WORDS = {
@@ -567,11 +570,13 @@ def extract_specific_model_query(
     cleaned = re.sub(r"\b(sn|s/n|serial|item|model)\s*[:#]?\s*[a-z0-9\-]+\b", " ", title, flags=re.IGNORECASE)
     cleaned = re.sub(r"\([^)]*\)|\[[^\]]*\]|#[A-Za-z0-9\-]+", " ", cleaned)
     cleaned = re.sub(r"\b(19[5-9]\d|20[0-2]\d)\b", " ", cleaned)
+    cleaned = re.sub(r"(?<![\w\-])(\d+)\s*[-]?\s*(?:w|watt|watts)\b", r" \1 ", cleaned, flags=re.IGNORECASE)
 
     allowed_numbers = {
         "335", "339", "175", "100", "18", "28", "15", "24", "550", "450", "350", "50", "60",
         "57", "58", "7", "20", "421", "414", "214", "102", "103", "2020", "4040", "87",
         "9", "808", "2", "3", "5", "6", "1", "30", "40", "65", "800", "900",
+        "10", "12", "25", "35", "45", "75", "85", "120",
     }
 
     tokens = re.findall(r"[A-Za-z0-9'\-]+", cleaned)
@@ -586,8 +591,9 @@ def extract_specific_model_query(
             continue
         if low.isdigit() and low not in allowed_numbers:
             continue
-        if low not in [k.lower() for k in kept]:
-            kept.append(tok)
+        if low in [k.lower() for k in kept] or (low.isdigit() and any(low in k.lower() for k in kept)):
+            continue
+        kept.append(tok)
         if len(kept) >= 5:
             break
 
@@ -912,9 +918,23 @@ def _heuristic_tier_comp(title: str, item_category: str = "Guitars") -> Tuple[st
                 return ("Vox AC15 / AC30 Tube Combo", 545.00)
             return ("Vox Guitar Amplifier", 165.00)
         if "orange" in lower:
-            if any(k in lower for k in ("rockerverb", "thunderverb", "ad30", "or15", "rocker")):
+            if any(k in lower for k in ("rockerverb", "thunderverb", "ad30", "or15", "rocker", "dual terror", "tiny terror", "tremlord")):
                 return ("Orange Tube Amplifier", 695.00)
-            return ("Orange Crush / Terror Amplifier", 225.00)
+            if any(k in lower for k in ("crush mini", "micro crush")):
+                return ("Orange Crush Mini Practice Amp", 35.00)
+            if any(k in lower for k in ("crush 12", "crush 10", "12w", "10w", "crush 12w")):
+                return ("Orange Crush 12 Compact Practice Amp", 75.00)
+            if any(k in lower for k in ("crush 20", "crush 20rt", "20rt")):
+                return ("Orange Crush 20 / 20RT Combo Amp", 115.00)
+            if any(k in lower for k in ("crush 35", "crush 35rt", "35rt")):
+                return ("Orange Crush 35RT Combo Amp", 195.00)
+            if any(k in lower for k in ("super crush 100", "crush pro", "crush 100", "crush 120")):
+                return ("Orange Super Crush 100 / Pro Series", 365.00)
+            if any(k in lower for k in ("micro terror", "micro dark", "terror stamp")):
+                return ("Orange Micro Terror / Micro Dark Hybrid Head", 115.00)
+            if "crush" in lower:
+                return ("Orange Crush Series Amplifier", 125.00)
+            return ("Orange Guitar Amplifier", 175.00)
         if "boss" in lower or "katana" in lower:
             if "100" in lower or "artist" in lower:
                 return ("Boss Katana 100 / Artist Amp", 295.00)
