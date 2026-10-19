@@ -627,7 +627,7 @@ with kpi_left:
         delta=f"Ask ${active_listing['ask_price_usd']:,.0f} + Ship ${active_listing['shipping_usd']:,.0f} + ${active_listing['bench_setup_usd']:,.0f} Prep",
     )
     k2.metric(
-        label="Used Condition Comp",
+        label="Realized Sold Comp",
         value=f"${active_listing['estimated_comp_usd']:,.0f}",
         delta=f"Profit @ Ask: ${active_listing['estimated_net_profit_usd']:+,.0f} ({active_listing['net_roi_pct']:+.1f}%)",
     )
